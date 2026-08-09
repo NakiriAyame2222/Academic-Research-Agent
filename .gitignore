@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+.pytest_cache/
+.coverage
+htmlcov/
+
+.venv/
+venv/
+env/
+
+.claude/
+
+.DS_Store
+Thumbs.db
+
+# Local runtime / generated data
+data/llm_config.env
+data/vector_store/
+data/downloads/
+data/memory.db
+
+# Optional local reports
+# data/reports/

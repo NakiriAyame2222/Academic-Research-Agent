@@ -1,0 +1,13 @@
+name: report_generation
+description: structured report writing workflow
+match_keywords:
+  - 报告
+  - report
+  - 总结
+  - summary
+steps:
+  - identify report sections
+  - organize evidence
+  - draft report
+  - polish language
+output_style: structured

@@ -1,0 +1,15 @@
+name: literature_review
+description: academic paper survey workflow
+match_keywords:
+  - 调研
+  - 文献
+  - 综述
+  - compare
+  - survey
+  - trend
+steps:
+  - retrieve papers
+  - summarize methods
+  - compare approaches
+  - generate conclusion
+output_style: academic
