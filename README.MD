@@ -1,52 +1,52 @@
 # Academic Research Agent
 
-[中文说明 / Chinese README](README.zh-CN.md)
+[English README](README.en.MD)
 
-A lightweight academic research agent for **paper QA**, **topic research**, **arXiv search**, and **citation-grounded answers**.
+一个面向学术研究场景的轻量级 Agent，支持 **论文问答**、**主题调研**、**arXiv 检索** 和 **带引用的回答**。
 
-This project helps you:
-- ask questions about a local paper (`.pdf`, `.md`, `.txt`)
-- research a topic and collect representative papers
-- search arXiv and summarize recent work
-- keep short-term / long-term memory across sessions
-- output answers with source citations
+这个项目可以帮助你：
+- 对本地论文或文本文件提问（`.pdf` / `.md` / `.txt`）
+- 围绕一个主题调研并收集代表性论文
+- 搜索 arXiv 并总结最新工作
+- 在多轮会话中保留短期 / 长期记忆
+- 输出带来源引用的回答
 
 ---
 
-## Overview
+## 项目简介
 
-Academic Research Agent is a lightweight agent for academic workflows, including:
+Academic Research Agent 是一个面向学术工作流的轻量级 Agent，主要能力包括：
 
-- **Paper QA** over local files
-- **Topic research** and literature discovery
-- **arXiv search** and recent-paper summarization
-- **Citation-grounded answers**
-- **Session memory** for multi-turn research
+- **论文问答**：基于本地文件进行 Paper QA
+- **主题调研**：围绕研究主题做文献发现与总结
+- **arXiv 检索**：搜索相关论文并生成简要综述
+- **引用溯源**：尽量输出带 citation 的回答
+- **会话记忆**：支持多轮连续研究
 
-This project is useful as a:
-- paper reading assistant
-- literature review assistant
-- academic agent demo / portfolio project
+适合用作：
+- 论文阅读助手
+- 文献调研助手
+- 学术 Agent Demo / 作品集项目
 
-## Features
+## 功能概览
 
-- Works with local `.pdf`, `.md`, and `.txt` files
-- Automatically routes requests into:
+- 支持本地 `.pdf`、`.md`、`.txt` 文件
+- 自动将请求路由为：
   - `paper_qa`
   - `topic_research`
-- Supports OpenAI-compatible LLM and embedding APIs
-- CLI-based interactive workflow
-- Optional source / citation output
+- 支持 OpenAI-compatible LLM 与 Embedding 接口
+- 支持命令行交互式工作流
+- 可选输出 citations / sources
 
-## Installation
+## 安装
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Configure API / Model / Base URL
+## 配置 API / Model / Base URL
 
-This project uses **OpenAI-compatible** endpoints. You need to provide:
+本项目使用 **OpenAI-compatible** 接口。你需要提供：
 
 - `LLM_MODEL`
 - `API_KEY`
@@ -55,11 +55,11 @@ This project uses **OpenAI-compatible** endpoints. You need to provide:
 - `EMBEDDING_API_KEY`
 - `EMBEDDING_BASE_URL`
 
-### Option 1: Recommended — use the default config file
+### 方式 1：推荐，使用默认配置文件
 
-Default config file location: `data/llm_config.env`
+默认配置文件位置：`data/llm_config.env`
 
-Example:
+示例：
 
 ```env
 LLM_MODEL=your-llm-model
@@ -71,83 +71,83 @@ EMBEDDING_API_KEY=your-embedding-api-key
 EMBEDDING_BASE_URL=https://your-provider-url
 ```
 
-### Option 2: Use the template file in this repo
+### 方式 2：使用仓库里的模板文件
 
-A sample template is provided in [cong.txt](cong.txt).
+仓库中提供了一个示例模板：[cong.txt](cong.txt)。
 
-After filling in the placeholders, run:
+填好占位符后，运行：
 
 ```bash
 python app.py --config-file cong.txt
 ```
 
-### Option 3: Pass config from the command line
+### 方式 3：命令行直接传入
 
 ```bash
 python app.py --model your-llm-model --api-key your-api-key --base-url https://your-provider-url
 ```
 
-## Usage
+## 使用方式
 
-### 1. Ask questions about a local paper
-
-```bash
-python app.py "What is the core contribution of this paper?" --file data/papers/your_paper.pdf --show-sources
-```
-
-You can also use `.md` or `.txt` files:
+### 1. 对本地论文提问
 
 ```bash
-python app.py "Summarize the method and experimental results." --file data/papers/your_note.md --show-sources
+python app.py "这篇论文的核心贡献是什么？" --file data/papers/your_paper.pdf --show-sources
 ```
 
-### 2. Run topic research
+也可以使用 `.md` 或 `.txt` 文件：
 
 ```bash
-python app.py "Help me research the latest progress in llm agent memory"
+python app.py "请总结这篇文章的方法和实验结果" --file data/papers/your_note.md --show-sources
 ```
 
-### 3. Start interactive chat mode
+### 2. 进行主题调研
+
+```bash
+python app.py "帮我调研一下 llm agent memory 的最新进展"
+```
+
+### 3. 启动交互式聊天模式
 
 ```bash
 python app.py --chat
 ```
 
-### 4. Resume a previous session
+### 4. 恢复历史会话
 
 ```bash
 python app.py --resume your-session-id
 ```
 
-## Common CLI Options
+## 常用 CLI 参数
 
-- `--file`: specify a local paper or text file
-- `--chat`: start interactive mode
-- `--resume`: resume an existing session
-- `--show-sources`: print citations after the answer
-- `--top-k`: control retrieval depth
-- `--rebuild-index`: force index rebuild
-- `--config-file`: load model / API / URL config from a file
-- `--save-config`: persist the provided config
+- `--file`：指定本地论文或文本文件
+- `--chat`：启动交互模式
+- `--resume`：恢复已有 session
+- `--show-sources`：在回答后打印引用来源
+- `--top-k`：控制检索深度
+- `--rebuild-index`：强制重建索引
+- `--config-file`：从文件加载 model / API / URL 配置
+- `--save-config`：保存本次提供的配置
 
-## Supported Backends
+## 支持的后端
 
-The current implementation uses an OpenAI-compatible client, so you can connect:
-- OpenAI-compatible LLM providers
-- OpenAI-compatible embedding providers
-- self-hosted or proxied compatible API gateways
+当前实现使用 OpenAI-compatible client，因此你可以接入：
+- OpenAI-compatible LLM 服务
+- OpenAI-compatible Embedding 服务
+- 自建或代理的兼容 API 网关
 
-> If API key / model / base URL are not configured correctly, the project falls back to a demo mode and will not produce reliable paper-grounded answers.
+> 如果 API key / model / base URL 配置不正确，项目会回退到 demo 模式，无法生成可靠的论文溯源回答。
 
-## Project Structure
+## 项目结构
 
 ```text
-app.py                # CLI entrypoint
+app.py                # CLI 入口
 agent/                # agent graph / nodes / artifacts
-rag/                  # retrieval and citation building
-memory/               # short-term and long-term memory
+rag/                  # 检索与引用构建
+memory/               # 短期与长期记忆
 tools/                # arXiv / search / file tools
-data/                 # config, papers, vector stores, reports
-skills/               # research/report skill definitions
-tests/                # tests and benchmark artifacts
+data/                 # 配置、论文、向量库、报告
+skills/               # research/report 技能定义
+tests/                # 测试与 benchmark artifacts
 ```
