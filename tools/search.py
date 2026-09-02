@@ -22,7 +22,7 @@ def search_papers(
         return retrieve_documents(query, top_k=top_k, persist_dir=persist_dir)
 
     if file_path:
-        persist_dir = get_file_scope_dir(settings["vector_store_files_dir"], file_path)
+        persist_dir = get_file_scope_dir(settings["vector_store_files_dir"], file_path) # type: ignore
         initialize_retriever(
             data_dir=None,
             persist_dir=persist_dir,
@@ -103,6 +103,16 @@ def build_selected_papers_index(
         downloaded.append({**paper, "file_path": file_path})
     persist_dir = get_session_scope_dir(settings["vector_store_dir"], session_id, "selected_papers")
     file_paths = [item["file_path"] for item in downloaded]
+    # 下载后的文件名是 _safe_name(arxiv_id) 生成的哈希名，不含标题。
+    # 这里把 arxiv_id / 标题写进 chunk metadata，让下游能把证据块归属到具体论文。
+    extra_metadata = {
+        item["file_path"]: {
+            "arxiv_id": str(item.get("arxiv_id", "") or ""),
+            "paper_title": str(item.get("title", "") or ""),
+            "entry_url": str(item.get("entry_url", "") or ""),
+        }
+        for item in downloaded
+    }
     if progress_callback:
         progress_callback(f"开始为 {len(file_paths)} 篇全文建立索引")
     initialize_retriever(
@@ -112,6 +122,7 @@ def build_selected_papers_index(
         chunk_overlap=settings["chunk_overlap"],
         rebuild=rebuild,
         file_paths=file_paths,
+        extra_metadata=extra_metadata,
     )
     if progress_callback:
         progress_callback("全文索引构建完成")

@@ -15,6 +15,13 @@ DEFAULT_PREFERENCES = {
 
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """已有 data/memory.db 的兼容迁移：列不存在才 ALTER。"""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def init_db(db_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
@@ -54,6 +61,7 @@ def init_db(db_path: str) -> None:
                 memory_type TEXT,
                 content TEXT,
                 source_ref TEXT,
+                embedding TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -69,6 +77,7 @@ def init_db(db_path: str) -> None:
             )
             """
         )
+        _ensure_column(conn, "memory_items", "embedding", "TEXT")
         conn.commit()
 
 
@@ -157,36 +166,151 @@ def fetch_session_artifact(session_id: str, artifact_type: str, db_path: str) ->
 
 
 
-def fetch_relevant_memories(user_id: str, topic: str, db_path: str, limit: int = 5) -> list[dict[str, Any]]:
+def _row_to_memory(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "item_id": row[0],
+        "topic": row[1],
+        "memory_type": row[2],
+        "content": row[3],
+        "source_ref": row[4],
+        "created_at": row[5],
+        "embedding": row[6],
+    }
+
+
+def _fetch_all_memories(user_id: str, db_path: str) -> list[dict[str, Any]]:
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT topic, memory_type, content, source_ref, created_at
+            SELECT item_id, topic, memory_type, content, source_ref, created_at, embedding
             FROM memory_items
-            WHERE user_id = ? AND (topic = ? OR topic = '')
+            WHERE user_id = ?
             ORDER BY created_at DESC
-            LIMIT ?
             """,
-            (user_id, topic, limit),
+            (user_id,),
         ).fetchall()
-    return [
-        {
-            "topic": row[0],
-            "memory_type": row[1],
-            "content": row[2],
-            "source_ref": row[3],
-            "created_at": row[4],
-        }
-        for row in rows
-    ]
+    return [_row_to_memory(row) for row in rows]
 
+
+def _strip_internal_fields(memory: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "topic": memory.get("topic", ""),
+        "memory_type": memory.get("memory_type", ""),
+        "content": memory.get("content", ""),
+        "source_ref": memory.get("source_ref", ""),
+        "created_at": memory.get("created_at", ""),
+    }
+
+
+def _keyword_relevance(query: str, memory: dict[str, Any]) -> float:
+    """向量不可用时的兜底：CJK 感知的词项重叠，而不是 topic 字符串精确相等。"""
+    from rag.text_tokenizer import term_overlap_score
+
+    haystack = f"{memory.get('topic', '')} {memory.get('content', '')}"
+    return max(term_overlap_score(query, haystack), term_overlap_score(haystack, query) * 0.5)
+
+
+def _recency_bonus(rank: int, total: int) -> float:
+    if total <= 1:
+        return 0.0
+    return 0.1 * (1.0 - rank / total)
+
+
+def backfill_memory_embeddings(user_id: str, db_path: str) -> int:
+    """给历史记忆惰性补 embedding；embedder 不可用时直接返回 0。"""
+    from config import get_embedder
+
+    embedder = get_embedder()
+    if embedder is None:
+        return 0
+
+    pending = [item for item in _fetch_all_memories(user_id, db_path) if not item.get("embedding")]
+    if not pending:
+        return 0
+    try:
+        vectors = embedder.embed_documents([f"{item.get('topic', '')} {item.get('content', '')}" for item in pending])
+    except Exception:
+        return 0
+    if len(vectors) != len(pending):
+        return 0
+
+    with sqlite3.connect(db_path) as conn:
+        for item, vector in zip(pending, vectors):
+            conn.execute(
+                "UPDATE memory_items SET embedding = ? WHERE item_id = ?",
+                (json.dumps(list(vector)), item["item_id"]),
+            )
+        conn.commit()
+    return len(pending)
+
+
+def fetch_relevant_memories(user_id: str, topic: str, db_path: str, limit: int = 5) -> list[dict[str, Any]]:
+    """按语义相关度召回长期记忆。
+
+    改动前是 WHERE user_id=? AND (topic=? OR topic='')，topic 字符串精确相等 ——
+    上次存的是 "llm agent memory"，这次问"agent 的记忆机制"一条都召回不到。
+    现在：优先 embedding 余弦 + topic 命中加成 + 新近度；embedder 不可用时
+    退化为词项重叠（仍然不是精确相等），最差情况才按时间倒序返回。
+    """
+    memories = _fetch_all_memories(user_id, db_path)
+    if not memories:
+        return []
+    if not topic:
+        return [_strip_internal_fields(item) for item in memories[:limit]]
+
+    backfill_memory_embeddings(user_id, db_path)
+    memories = _fetch_all_memories(user_id, db_path)
+
+    query_vector: list[float] | None = None
+    try:
+        from config import get_embedder
+
+        embedder = get_embedder()
+        if embedder is not None:
+            query_vector = embedder.embed_query(topic)
+    except Exception:
+        query_vector = None
+
+    from rag.sparse import cosine_similarity
+
+    normalized_topic = topic.strip().lower()
+    total = len(memories)
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    for rank, memory in enumerate(memories):
+        semantic = 0.0
+        raw_embedding = memory.get("embedding")
+        if query_vector is not None and raw_embedding:
+            try:
+                semantic = max(0.0, cosine_similarity(query_vector, json.loads(raw_embedding)))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                semantic = 0.0
+
+        keyword = _keyword_relevance(topic, memory)
+        topic_bonus = 0.15 if str(memory.get("topic", "")).strip().lower() == normalized_topic else 0.0
+        # 无 topic 的通用记忆（如输出偏好）保留一点基础分，保证仍会被带上
+        general_bonus = 0.05 if not str(memory.get("topic", "")).strip() else 0.0
+        score = semantic * 0.7 + keyword * 0.3 + topic_bonus + general_bonus + _recency_bonus(rank, total)
+        scored.append((score, -rank, memory))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [_strip_internal_fields(memory) for _, _, memory in scored[:limit]]
 
 
 def save_memory_item(user_id: str, topic: str, memory_type: str, content: str, source_ref: str, db_path: str) -> None:
+    embedding_json: str | None = None
+    try:
+        from config import get_embedder
+
+        embedder = get_embedder()
+        if embedder is not None and content:
+            embedding_json = json.dumps(list(embedder.embed_query(f"{topic} {content}")))
+    except Exception:
+        embedding_json = None
+
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO memory_items (user_id, topic, memory_type, content, source_ref) VALUES (?, ?, ?, ?, ?)",
-            (user_id, topic, memory_type, content, source_ref),
+            "INSERT INTO memory_items (user_id, topic, memory_type, content, source_ref, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, topic, memory_type, content, source_ref, embedding_json),
         )
         conn.commit()
 

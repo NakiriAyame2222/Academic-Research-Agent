@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agent.graph import build_graph
+from agent.intent import SUPPORTED_PAPER_EXTENSIONS, classify_intent
 from agent.state import build_initial_state
 from config import (
     apply_config_values,
@@ -17,8 +18,6 @@ from config import (
 from memory.long_term import init_db, save_memory_item, update_user_preferences
 from memory.short_term import append_message, load_or_create_session, save_checkpoint
 from rag.retriever import get_file_scope_dir, initialize_retriever
-
-SUPPORTED_PAPER_EXTENSIONS = {".pdf", ".txt", ".md"}
 
 
 def _print_progress_line(message: str) -> None:
@@ -102,30 +101,7 @@ def maybe_save_pending_memories(
 
 
 def detect_intent_mode(query: str, file_path: str | None = None) -> str:
-    if file_path:
-        return "paper_qa"
-
-    possible_path = Path(query.strip())
-    if possible_path.exists() and possible_path.suffix.lower() in SUPPORTED_PAPER_EXTENSIONS:
-        return "paper_qa"
-
-    lowered = query.lower()
-    topic_tokens = [
-        "arxiv", "survey", "review", "调研", "综述", "找论文", "research", "topic", "主题", "搜一下", "最新进展",
-        "overview", "recent papers", "latest", "state of the art", "research direction", "研究方向", "研究脉络", "代表性论文",
-        "发展", "收集", "我想研究", "最新方法",
-    ]
-    paper_tokens = [
-        "论文", "这篇", "这些论文", "方法", "实验结果", "贡献", "总结", "解释", "什么", "如何", "为什么", "对比",
-        "this paper", "the paper", "section", "figure", "table", "ablation", "conclusion", "future work", "methodology",
-        "dataset", "authors", "latency", "result table", "算法步骤", "图", "第 ", "怎么做",
-    ]
-
-    if any(token in lowered for token in topic_tokens):
-        return "topic_research"
-    if any(token in lowered for token in paper_tokens):
-        return "paper_qa"
-    return "topic_research"
+    return classify_intent(query, file_path=file_path)
 
 
 def resolve_file_path(query: str, explicit_file_path: str | None = None) -> str | None:
@@ -183,6 +159,7 @@ def run_research(
     top_k: int | None = None,
     resume: bool = False,
     progress_callback: Callable[[str], None] | None = None,
+    output_path: str | None = None,
 ) -> dict[str, Any]:
     resolved_file_path = resolve_file_path(query, file_path)
     intent_mode = detect_intent_mode(query, resolved_file_path)
@@ -210,6 +187,7 @@ def run_research(
     state["resume_from_checkpoint"] = resume
     state["paper_path"] = resolved_file_path or state.get("paper_path", "")
     state["progress_callback"] = progress_callback
+    state["output_path"] = output_path or ""
     state["retrieval_scope"] = {
         "mode": "single_file" if intent_mode == "paper_qa" and resolved_file_path else "corpus",
         "persist_dir": app_context["persist_dir"],
@@ -244,6 +222,7 @@ def run_chat_loop(
     resume: bool,
     initial_query: str | None = None,
     show_sources: bool = False,
+    output_path: str | None = None,
 ) -> None:
     print("进入学术研究对话模式，输入 exit 或 quit 结束。")
     first_turn = True
@@ -272,15 +251,30 @@ def run_chat_loop(
             top_k=top_k,
             resume=resume or not first_turn,
             progress_callback=_print_progress_line,
+            output_path=output_path if first_turn else None,
         )
         latest_state = final_state
         current_file = final_state.get("paper_path") or current_file
         print(final_state.get("final_answer") or final_state.get("final_report", ""))
+        if final_state.get("report_path"):
+            print(f"\n报告已保存到：{final_state['report_path']}")
         if show_sources and final_state.get("citations"):
             print("\nSources:")
             for citation in final_state["citations"]:
                 locator = f"p.{citation['page']}" if citation.get("page") is not None else f"chunk {citation.get('chunk_index', 0)}"
                 print(f"- {citation['id']}: {citation['source']} ({locator})")
+        audit = final_state.get("citation_audit") or {}
+        if show_sources and audit:
+            print(
+                f"\n引用校验：共 {audit.get('total_references', 0)} 处引用，"
+                f"非法编号 {audit.get('invalid_references') or '无'}，"
+                f"证据覆盖率 {audit.get('citation_coverage', 0):.0%}"
+            )
+        trace = final_state.get("tool_trace") or []
+        if show_sources and trace:
+            print("\n工具调用轨迹:")
+            for item in trace:
+                print(f"- step {item.get('step')} {item.get('tool')} -> {item.get('result_summary')}")
         first_turn = False
 
 
@@ -295,6 +289,11 @@ def main() -> None:
     parser.add_argument("--rebuild-index", action="store_true", help="Force rebuild of the retriever index")
     parser.add_argument("--top-k", type=int, help="Number of chunks or papers to retrieve")
     parser.add_argument("--show-sources", action="store_true", help="Print citations after the answer")
+    parser.add_argument("--output", help="Write the generated report to this path")
+    parser.add_argument("--serve-mcp", action="store_true", help="Start the MCP server instead of the chat loop")
+    parser.add_argument("--mcp-transport", default="stdio", choices=["stdio", "http"], help="MCP transport")
+    parser.add_argument("--mcp-host", default="127.0.0.1", help="MCP host (http transport only)")
+    parser.add_argument("--mcp-port", type=int, default=8000, help="MCP port (http transport only)")
     parser.add_argument("--config-file", help="Load model config from a KEY=VALUE file")
     parser.add_argument("--save-config", action="store_true", help="Persist provided model settings for future runs")
     parser.add_argument("--model", help="Override LLM model for this run")
@@ -327,6 +326,12 @@ def main() -> None:
 
     session_id = args.resume or args.session_id or args.user_id
 
+    if args.serve_mcp:
+        from mcp_server.server import run_server
+
+        run_server(transport=args.mcp_transport, host=args.mcp_host, port=args.mcp_port)
+        return
+
     if args.chat:
         run_chat_loop(
             user_id=args.user_id,
@@ -337,19 +342,7 @@ def main() -> None:
             resume=bool(args.resume),
             initial_query=args.task,
             show_sources=args.show_sources,
-        )
-        return
-
-    if args.task:
-        run_chat_loop(
-            user_id=args.user_id,
-            session_id=session_id,
-            file_path=args.file,
-            rebuild_index=args.rebuild_index,
-            top_k=args.top_k,
-            resume=bool(args.resume),
-            initial_query=args.task,
-            show_sources=args.show_sources,
+            output_path=args.output,
         )
         return
 
@@ -360,7 +353,9 @@ def main() -> None:
         rebuild_index=args.rebuild_index,
         top_k=args.top_k,
         resume=bool(args.resume),
+        initial_query=args.task,
         show_sources=args.show_sources,
+        output_path=args.output,
     )
 
 

@@ -138,20 +138,39 @@ def _load_single_text(file_path: Path) -> list[dict[str, Any]]:
 
 
 
-def _load_path(path: Path) -> list[dict[str, Any]]:
+def _resolve_extra_metadata(
+    path: Path,
+    extra_metadata: dict[str, dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """按文件路径取额外元数据（如 arxiv_id / paper_title），兼容绝对与相对路径写法。"""
+    if not extra_metadata:
+        return {}
+    candidates = [str(path), str(path.resolve()), path.name]
+    for candidate in candidates:
+        if candidate in extra_metadata:
+            return dict(extra_metadata[candidate])
+    normalized = {str(Path(key).resolve()): value for key, value in extra_metadata.items()}
+    return dict(normalized.get(str(path.resolve()), {}))
+
+
+def _load_path(path: Path, extra_metadata: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     suffix = path.suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
         raise ValueError(f"Unsupported document type: {path}")
-    if suffix == ".pdf":
-        return _load_single_pdf(path)
-    return _load_single_text(path)
+    documents = _load_single_pdf(path) if suffix == ".pdf" else _load_single_text(path)
 
+    injected = _resolve_extra_metadata(path, extra_metadata)
+    if injected:
+        for document in documents:
+            document["metadata"].update(injected)
+    return documents
 
 
 def load_documents(
     data_dir: str | None = None,
     file_path: str | None = None,
     file_paths: list[str] | None = None,
+    extra_metadata: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if file_paths:
         documents: list[dict[str, Any]] = []
@@ -159,14 +178,14 @@ def load_documents(
             path = Path(item)
             if not path.exists():
                 raise FileNotFoundError(f"Document not found: {item}")
-            documents.extend(_load_path(path))
+            documents.extend(_load_path(path, extra_metadata))
         return documents
 
     if file_path:
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(f"Document not found: {file_path}")
-        return _load_path(path)
+        return _load_path(path, extra_metadata)
 
     if not data_dir:
         return []
@@ -176,7 +195,7 @@ def load_documents(
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
-        documents.extend(_load_path(path))
+        documents.extend(_load_path(path, extra_metadata))
     return documents
 
 
@@ -225,10 +244,16 @@ def split_documents(
 
 def prepare_documents(
     data_dir: str | None = None,
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
+    chunk_size: int = 800,
+    chunk_overlap: int = 80,
     file_path: str | None = None,
     file_paths: list[str] | None = None,
+    extra_metadata: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    documents = load_documents(data_dir=data_dir, file_path=file_path, file_paths=file_paths)
+    documents = load_documents(
+        data_dir=data_dir,
+        file_path=file_path,
+        file_paths=file_paths,
+        extra_metadata=extra_metadata,
+    )
     return split_documents(documents, chunk_size=chunk_size, chunk_overlap=chunk_overlap)

@@ -1,0 +1,674 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "帮我调研一下 llm agent memory 的最新进展"
+    }
+  ],
+  "recent_messages": [
+    {
+      "role": "user",
+      "content": "帮我调研一下 llm agent memory 的最新进展"
+    }
+  ],
+  "task": "帮我调研一下 llm agent memory 的最新进展",
+  "current_query": "帮我调研一下 llm agent memory 的最新进展",
+  "user_id": "tester",
+  "session_id": "topic-research-test",
+  "mode": "topic_research",
+  "intent_mode": "topic_research",
+  "session_mode": "topic_discovery",
+  "topic": "帮我调研一下 llm agent memory 的最新进展",
+  "paper_path": "",
+  "paper_metadata": {},
+  "retrieved_docs": [
+    {
+      "page_content": "Evidence discussing memory retention and benchmark coverage.",
+      "metadata": {
+        "source": "/tmp/2601.00001.pdf",
+        "source_name": "Memory-Augmented Agents.pdf",
+        "page": 3,
+        "chunk_index": 0,
+        "section_title": "Experiments"
+      }
+    },
+    {
+      "page_content": "Evidence describing long-context agent memory behavior.",
+      "metadata": {
+        "source": "/tmp/2602.00002.pdf",
+        "source_name": "Long Context Agent Memory.pdf",
+        "page": 5,
+        "chunk_index": 1,
+        "section_title": "Method"
+      }
+    }
+  ],
+  "research_notes": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。\n\n最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。\n\n最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+  "user_profile": {
+    "user_id": "tester",
+    "language": "Chinese",
+    "format": "structured",
+    "tone": "academic",
+    "interests": [
+      "agent",
+      "llm",
+      "rag"
+    ]
+  },
+  "selected_skill": {
+    "name": "literature_review",
+    "description": "academic paper survey workflow",
+    "match_keywords": [
+      "调研",
+      "文献",
+      "综述",
+      "compare",
+      "survey",
+      "trend"
+    ],
+    "steps": [
+      "retrieve papers",
+      "summarize methods",
+      "compare approaches",
+      "generate conclusion"
+    ],
+    "output_style": "academic"
+  },
+  "final_report": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+  "final_answer": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+  "final_synthesis": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+  "citations": [
+    {
+      "id": "S1",
+      "source": "/tmp/2601.00001.pdf",
+      "source_name": "Memory-Augmented Agents.pdf",
+      "page": 3,
+      "chunk_index": 0,
+      "section_title": "Experiments",
+      "excerpt": "Evidence discussing memory retention and benchmark coverage."
+    },
+    {
+      "id": "S2",
+      "source": "/tmp/2602.00002.pdf",
+      "source_name": "Long Context Agent Memory.pdf",
+      "page": 5,
+      "chunk_index": 1,
+      "section_title": "Method",
+      "excerpt": "Evidence describing long-context agent memory behavior."
+    }
+  ],
+  "turns": [],
+  "active_document": {
+    "file_path": null,
+    "source_type": "",
+    "index_scope": "corpus"
+  },
+  "retrieval_scope": {
+    "mode": "corpus",
+    "persist_dir": "stub-persist-dir",
+    "file_path": null,
+    "rebuild": false,
+    "top_k": 3,
+    "downloads": [
+      {
+        "title": "Memory-Augmented Agents",
+        "summary": "Studies memory-augmented planning for agents.",
+        "authors": [
+          "A"
+        ],
+        "published": "2026-01-01",
+        "arxiv_id": "2601.00001",
+        "pdf_url": "http://example.com/1.pdf",
+        "entry_url": "http://arxiv.org/abs/2601.00001",
+        "query": "llm agent memory",
+        "query_label": "broad",
+        "file_path": "/tmp/2601.00001.pdf"
+      },
+      {
+        "title": "Long Context Agent Memory",
+        "summary": "Focuses on retention and retrieval across long interactions.",
+        "authors": [
+          "B"
+        ],
+        "published": "2026-02-01",
+        "arxiv_id": "2602.00002",
+        "pdf_url": "http://example.com/2.pdf",
+        "entry_url": "http://arxiv.org/abs/2602.00002",
+        "query": "llm agent memory",
+        "query_label": "survey",
+        "file_path": "/tmp/2602.00002.pdf"
+      }
+    ]
+  },
+  "search_queries": [
+    "帮我调研一下 llm agent memory 的最新进展",
+    "帮我调研一下 llm agent memory 的最新进展 survey",
+    "帮我调研一下 llm agent memory 的最新进展 methods",
+    "帮我调研一下 llm agent memory 的最新进展 benchmark",
+    "帮我调研一下 llm agent memory 的最新进展 applications"
+  ],
+  "search_plan": {
+    "goal": "研究主题 帮我调研一下 llm agent memory 的最新进展 的核心问题、方法、实验和未来方向",
+    "subtopics": [
+      "帮我调研一下 llm agent memory 的最新进展"
+    ],
+    "query_groups": [
+      "broad",
+      "survey",
+      "method",
+      "benchmark",
+      "application"
+    ],
+    "open_questions": [],
+    "selection_criteria": [
+      "代表性",
+      "相关性",
+      "实验充分性"
+    ],
+    "report_outline": [
+      "背景",
+      "代表方法",
+      "实验对比",
+      "研究空白与未来方向"
+    ]
+  },
+  "query_batches": [
+    {
+      "label": "broad",
+      "query": "帮我调研一下 llm agent memory 的最新进展"
+    },
+    {
+      "label": "survey",
+      "query": "帮我调研一下 llm agent memory 的最新进展 survey"
+    },
+    {
+      "label": "method",
+      "query": "帮我调研一下 llm agent memory 的最新进展 methods"
+    },
+    {
+      "label": "benchmark",
+      "query": "帮我调研一下 llm agent memory 的最新进展 benchmark"
+    },
+    {
+      "label": "application",
+      "query": "帮我调研一下 llm agent memory 的最新进展 applications"
+    }
+  ],
+  "survey_candidates": [
+    {
+      "title": "Memory-Augmented Agents",
+      "summary": "Studies memory-augmented planning for agents.",
+      "authors": [
+        "A"
+      ],
+      "published": "2026-01-01",
+      "arxiv_id": "2601.00001",
+      "pdf_url": "http://example.com/1.pdf",
+      "entry_url": "http://arxiv.org/abs/2601.00001",
+      "query": "llm agent memory",
+      "query_label": "broad"
+    }
+  ],
+  "selected_surveys": [],
+  "paper_candidates": [
+    {
+      "title": "Memory-Augmented Agents",
+      "summary": "Studies memory-augmented planning for agents.",
+      "authors": [
+        "A"
+      ],
+      "published": "2026-01-01",
+      "arxiv_id": "2601.00001",
+      "pdf_url": "http://example.com/1.pdf",
+      "entry_url": "http://arxiv.org/abs/2601.00001",
+      "query": "llm agent memory",
+      "query_label": "broad"
+    },
+    {
+      "title": "Long Context Agent Memory",
+      "summary": "Focuses on retention and retrieval across long interactions.",
+      "authors": [
+        "B"
+      ],
+      "published": "2026-02-01",
+      "arxiv_id": "2602.00002",
+      "pdf_url": "http://example.com/2.pdf",
+      "entry_url": "http://arxiv.org/abs/2602.00002",
+      "query": "llm agent memory",
+      "query_label": "survey"
+    },
+    {
+      "title": "Tool-Using Agent Memory Benchmarks",
+      "summary": "Provides evaluation benchmarks for agent memory systems.",
+      "authors": [
+        "C"
+      ],
+      "published": "2026-03-01",
+      "arxiv_id": "2603.00003",
+      "pdf_url": "http://example.com/3.pdf",
+      "entry_url": "http://arxiv.org/abs/2603.00003",
+      "query": "llm agent memory",
+      "query_label": "benchmark"
+    }
+  ],
+  "selected_papers": [
+    {
+      "title": "Tool-Using Agent Memory Benchmarks",
+      "summary": "Provides evaluation benchmarks for agent memory systems.",
+      "authors": [
+        "C"
+      ],
+      "published": "2026-03-01",
+      "arxiv_id": "2603.00003",
+      "pdf_url": "http://example.com/3.pdf",
+      "entry_url": "http://arxiv.org/abs/2603.00003",
+      "query": "llm agent memory",
+      "query_label": "benchmark"
+    },
+    {
+      "title": "Long Context Agent Memory",
+      "summary": "Focuses on retention and retrieval across long interactions.",
+      "authors": [
+        "B"
+      ],
+      "published": "2026-02-01",
+      "arxiv_id": "2602.00002",
+      "pdf_url": "http://example.com/2.pdf",
+      "entry_url": "http://arxiv.org/abs/2602.00002",
+      "query": "llm agent memory",
+      "query_label": "survey"
+    },
+    {
+      "title": "Memory-Augmented Agents",
+      "summary": "Studies memory-augmented planning for agents.",
+      "authors": [
+        "A"
+      ],
+      "published": "2026-01-01",
+      "arxiv_id": "2601.00001",
+      "pdf_url": "http://example.com/1.pdf",
+      "entry_url": "http://arxiv.org/abs/2601.00001",
+      "query": "llm agent memory",
+      "query_label": "broad"
+    }
+  ],
+  "paper_notes": [
+    {
+      "title": "Tool-Using Agent Memory Benchmarks",
+      "arxiv_id": "2603.00003",
+      "summary": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+      "selection_status": "selected"
+    },
+    {
+      "title": "Long Context Agent Memory",
+      "arxiv_id": "2602.00002",
+      "summary": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+      "selection_status": "selected"
+    },
+    {
+      "title": "Memory-Augmented Agents",
+      "arxiv_id": "2601.00001",
+      "summary": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+      "selection_status": "selected"
+    }
+  ],
+  "working_document_id": "topic-research-test",
+  "working_document": {
+    "topic": "帮我调研一下 llm agent memory 的最新进展",
+    "search_plan": {
+      "goal": "研究主题 帮我调研一下 llm agent memory 的最新进展 的核心问题、方法、实验和未来方向",
+      "subtopics": [
+        "帮我调研一下 llm agent memory 的最新进展"
+      ],
+      "query_groups": [
+        "broad",
+        "survey",
+        "method",
+        "benchmark",
+        "application"
+      ],
+      "open_questions": [],
+      "selection_criteria": [
+        "代表性",
+        "相关性",
+        "实验充分性"
+      ],
+      "report_outline": [
+        "背景",
+        "代表方法",
+        "实验对比",
+        "研究空白与未来方向"
+      ]
+    },
+    "query_batches": [
+      {
+        "label": "broad",
+        "query": "帮我调研一下 llm agent memory 的最新进展"
+      },
+      {
+        "label": "survey",
+        "query": "帮我调研一下 llm agent memory 的最新进展 survey"
+      },
+      {
+        "label": "method",
+        "query": "帮我调研一下 llm agent memory 的最新进展 methods"
+      },
+      {
+        "label": "benchmark",
+        "query": "帮我调研一下 llm agent memory 的最新进展 benchmark"
+      },
+      {
+        "label": "application",
+        "query": "帮我调研一下 llm agent memory 的最新进展 applications"
+      }
+    ],
+    "search_runs": [
+      {
+        "label": "broad",
+        "query": "llm agent memory",
+        "result_count": 2,
+        "paper_ids": [
+          "2601.00001",
+          "2602.00002"
+        ]
+      },
+      {
+        "label": "benchmark",
+        "query": "llm agent memory benchmark",
+        "result_count": 2,
+        "paper_ids": [
+          "2602.00002",
+          "2603.00003"
+        ]
+      }
+    ],
+    "candidate_papers": [
+      {
+        "title": "Memory-Augmented Agents",
+        "arxiv_id": "2601.00001",
+        "published": "2026-01-01",
+        "authors": [
+          "A"
+        ],
+        "entry_url": "http://arxiv.org/abs/2601.00001",
+        "pdf_url": "http://example.com/1.pdf",
+        "query": "llm agent memory",
+        "query_label": "broad",
+        "problem": "",
+        "related_work": "",
+        "method": "",
+        "experiments": "",
+        "summary": "Studies memory-augmented planning for agents.",
+        "selection_status": "selected"
+      },
+      {
+        "title": "Long Context Agent Memory",
+        "arxiv_id": "2602.00002",
+        "published": "2026-02-01",
+        "authors": [
+          "B"
+        ],
+        "entry_url": "http://arxiv.org/abs/2602.00002",
+        "pdf_url": "http://example.com/2.pdf",
+        "query": "llm agent memory",
+        "query_label": "survey",
+        "problem": "",
+        "related_work": "",
+        "method": "",
+        "experiments": "",
+        "summary": "Focuses on retention and retrieval across long interactions.",
+        "selection_status": "selected"
+      },
+      {
+        "title": "Tool-Using Agent Memory Benchmarks",
+        "arxiv_id": "2603.00003",
+        "published": "2026-03-01",
+        "authors": [
+          "C"
+        ],
+        "entry_url": "http://arxiv.org/abs/2603.00003",
+        "pdf_url": "http://example.com/3.pdf",
+        "query": "llm agent memory",
+        "query_label": "benchmark",
+        "problem": "",
+        "related_work": "",
+        "method": "",
+        "experiments": "",
+        "summary": "Provides evaluation benchmarks for agent memory systems.",
+        "selection_status": "selected"
+      }
+    ],
+    "selected_papers": [
+      {
+        "title": "Tool-Using Agent Memory Benchmarks",
+        "summary": "Provides evaluation benchmarks for agent memory systems.",
+        "authors": [
+          "C"
+        ],
+        "published": "2026-03-01",
+        "arxiv_id": "2603.00003",
+        "pdf_url": "http://example.com/3.pdf",
+        "entry_url": "http://arxiv.org/abs/2603.00003",
+        "query": "llm agent memory",
+        "query_label": "benchmark"
+      },
+      {
+        "title": "Long Context Agent Memory",
+        "summary": "Focuses on retention and retrieval across long interactions.",
+        "authors": [
+          "B"
+        ],
+        "published": "2026-02-01",
+        "arxiv_id": "2602.00002",
+        "pdf_url": "http://example.com/2.pdf",
+        "entry_url": "http://arxiv.org/abs/2602.00002",
+        "query": "llm agent memory",
+        "query_label": "survey"
+      },
+      {
+        "title": "Memory-Augmented Agents",
+        "summary": "Studies memory-augmented planning for agents.",
+        "authors": [
+          "A"
+        ],
+        "published": "2026-01-01",
+        "arxiv_id": "2601.00001",
+        "pdf_url": "http://example.com/1.pdf",
+        "entry_url": "http://arxiv.org/abs/2601.00001",
+        "query": "llm agent memory",
+        "query_label": "broad"
+      }
+    ],
+    "paper_notes_brief": [
+      {
+        "title": "Memory-Augmented Agents",
+        "arxiv_id": "2601.00001",
+        "published": "2026-01-01",
+        "authors": [
+          "A"
+        ],
+        "entry_url": "http://arxiv.org/abs/2601.00001",
+        "pdf_url": "http://example.com/1.pdf",
+        "query": "llm agent memory",
+        "query_label": "broad",
+        "problem": "",
+        "related_work": "",
+        "method": "",
+        "experiments": "",
+        "summary": "Studies memory-augmented planning for agents.",
+        "selection_status": "candidate"
+      },
+      {
+        "title": "Long Context Agent Memory",
+        "arxiv_id": "2602.00002",
+        "published": "2026-02-01",
+        "authors": [
+          "B"
+        ],
+        "entry_url": "http://arxiv.org/abs/2602.00002",
+        "pdf_url": "http://example.com/2.pdf",
+        "query": "llm agent memory",
+        "query_label": "survey",
+        "problem": "",
+        "related_work": "",
+        "method": "",
+        "experiments": "",
+        "summary": "Focuses on retention and retrieval across long interactions.",
+        "selection_status": "candidate"
+      },
+      {
+        "title": "Tool-Using Agent Memory Benchmarks",
+        "arxiv_id": "2603.00003",
+        "published": "2026-03-01",
+        "authors": [
+          "C"
+        ],
+        "entry_url": "http://arxiv.org/abs/2603.00003",
+        "pdf_url": "http://example.com/3.pdf",
+        "query": "llm agent memory",
+        "query_label": "benchmark",
+        "problem": "",
+        "related_work": "",
+        "method": "",
+        "experiments": "",
+        "summary": "Provides evaluation benchmarks for agent memory systems.",
+        "selection_status": "candidate"
+      }
+    ],
+    "paper_notes_fulltext": [
+      {
+        "title": "Tool-Using Agent Memory Benchmarks",
+        "arxiv_id": "2603.00003",
+        "summary": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+        "selection_status": "selected"
+      },
+      {
+        "title": "Long Context Agent Memory",
+        "arxiv_id": "2602.00002",
+        "summary": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+        "selection_status": "selected"
+      },
+      {
+        "title": "Memory-Augmented Agents",
+        "arxiv_id": "2601.00001",
+        "summary": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+        "selection_status": "selected"
+      }
+    ],
+    "report_outline": [
+      "背景与核心问题",
+      "代表方法与关键贡献",
+      "实验与结果对比",
+      "研究空白与未来方向"
+    ],
+    "survey_text": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+    "open_questions": [],
+    "final_survey": {
+      "topic": "帮我调研一下 llm agent memory 的最新进展",
+      "outline": [
+        "背景与核心问题",
+        "代表方法与关键贡献",
+        "实验与结果对比",
+        "研究空白与未来方向"
+      ],
+      "full_text": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+      "papers": [
+        "Tool-Using Agent Memory Benchmarks",
+        "Long Context Agent Memory",
+        "Memory-Augmented Agents"
+      ],
+      "citations": [
+        {
+          "id": "S1",
+          "source": "/tmp/2601.00001.pdf",
+          "source_name": "Memory-Augmented Agents.pdf",
+          "page": 3,
+          "chunk_index": 0,
+          "section_title": "Experiments",
+          "excerpt": "Evidence discussing memory retention and benchmark coverage."
+        },
+        {
+          "id": "S2",
+          "source": "/tmp/2602.00002.pdf",
+          "source_name": "Long Context Agent Memory.pdf",
+          "page": 5,
+          "chunk_index": 1,
+          "section_title": "Method",
+          "excerpt": "Evidence describing long-context agent memory behavior."
+        }
+      ]
+    }
+  },
+  "survey_artifact": {
+    "topic": "帮我调研一下 llm agent memory 的最新进展",
+    "outline": [
+      "背景与核心问题",
+      "代表方法与关键贡献",
+      "实验与结果对比",
+      "研究空白与未来方向"
+    ],
+    "full_text": "最终综述：该主题聚焦 memory retention、benchmark coverage、grounded evidence，并引用代表论文展开分析。",
+    "papers": [
+      "Tool-Using Agent Memory Benchmarks",
+      "Long Context Agent Memory",
+      "Memory-Augmented Agents"
+    ],
+    "citations": [
+      {
+        "id": "S1",
+        "source": "/tmp/2601.00001.pdf",
+        "source_name": "Memory-Augmented Agents.pdf",
+        "page": 3,
+        "chunk_index": 0,
+        "section_title": "Experiments",
+        "excerpt": "Evidence discussing memory retention and benchmark coverage."
+      },
+      {
+        "id": "S2",
+        "source": "/tmp/2602.00002.pdf",
+        "source_name": "Long Context Agent Memory.pdf",
+        "page": 5,
+        "chunk_index": 1,
+        "section_title": "Method",
+        "excerpt": "Evidence describing long-context agent memory behavior."
+      }
+    ]
+  },
+  "memory_summary": "主题：帮我调研一下 llm agent memory 的最新进展\n候选论文：Tool-Using Agent Memory Benchmarks；Long Context Agent Memory；Memory-Augmented Agents",
+  "conversation_summary_middle": "",
+  "initial_user_question": "帮我调研一下 llm agent memory 的最新进展",
+  "open_questions": [],
+  "evidence_gaps": [],
+  "long_term_memories": [],
+  "pending_memory_candidates": [
+    {
+      "memory_type": "interest",
+      "content": "关注 agent memory benchmark"
+    }
+  ],
+  "selected_paper_fulltext_docs": [
+    {
+      "page_content": "Evidence discussing memory retention and benchmark coverage.",
+      "metadata": {
+        "source": "/tmp/2601.00001.pdf",
+        "source_name": "Memory-Augmented Agents.pdf",
+        "page": 3,
+        "chunk_index": 0,
+        "section_title": "Experiments"
+      }
+    },
+    {
+      "page_content": "Evidence describing long-context agent memory behavior.",
+      "metadata": {
+        "source": "/tmp/2602.00002.pdf",
+        "source_name": "Long Context Agent Memory.pdf",
+        "page": 5,
+        "chunk_index": 1,
+        "section_title": "Method"
+      }
+    }
+  ],
+  "resume_from_checkpoint": false,
+  "exit_requested": false,
+  "awaiting_memory_confirmation": true
+}

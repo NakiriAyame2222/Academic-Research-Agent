@@ -1,7 +1,7 @@
-LLM_MODEL=INPUT YOUR MODEL AT HERE
-API_KEY=INPUT YOUR API_KEY AT HERE
-BASE_URL=INPUT YOUR URL AT HERE
+LLM_MODEL=claude-opus-4-8-thinking
+API_KEY=sk-Je1hjS2MycKQH7w6iMQbByJUWLdtrjGm9Z7Ox6gzqr2FHdie
+BASE_URL=https://tabitoken.com
 
-Embedding_MODEL=INPUT YOUR EMBEDDING MODEL AT HERE
-Embedding_API_KEY=INPUT YOUR EMBEDDING API_KEY AT HERE
-Embedding_BASE_URL=INPUT YOUR URL AT HERE
+Embedding_MODEL=Qwen/Qwen3-Embedding-4B
+Embedding_API_KEY=ms-ae21bbb1-ceba-4beb-a1f1-ca0b22047a9a
+Embedding_BASE_URL=https://api-inference.modelscope.cn/v1/

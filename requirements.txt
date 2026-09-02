@@ -1,3 +1,7 @@
+# 直接依赖：config.py / tools/arxiv_search.py 直接 import
+openai>=1.40.0
+requests>=2.32.0
+
 langgraph>=0.2.0
 langchain>=0.3.0
 langchain-community>=0.3.0
@@ -7,3 +11,7 @@ pyyaml>=6.0.1
 pypdf>=5.0.0
 pymupdf>=1.24.9
 fastmcp>=0.1.0
+
+# 检索增强：均为可选，未安装时代码自动降级
+chromadb>=0.5.0
+jieba>=0.42.1

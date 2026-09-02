@@ -1,0 +1,121 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "这篇论文的核心贡献是什么？"
+    }
+  ],
+  "recent_messages": [
+    {
+      "role": "user",
+      "content": "这篇论文的核心贡献是什么？"
+    }
+  ],
+  "task": "这篇论文的核心贡献是什么？",
+  "current_query": "这篇论文的核心贡献是什么？",
+  "user_id": "tester",
+  "session_id": "paper-qa-test",
+  "mode": "paper_explain",
+  "intent_mode": "paper_qa",
+  "session_mode": "paper_qa",
+  "topic": "",
+  "paper_path": "D:\\TMP\\pytest-of-不知茗\\pytest-12\\test_paper_qa_pipeline_returns0\\paper.md",
+  "paper_metadata": {},
+  "retrieved_docs": [
+    {
+      "page_content": "# Hybrid Retrieval Study\n\nThe core contribution is a hybrid retrieval pipeline that combines semantic similarity with sparse retrieval.\nThe experiments show better grounding and citation quality than sparse-only retrieval.\n",
+      "metadata": {
+        "document_id": "paper",
+        "source": "D:\\TMP\\pytest-of-不知茗\\pytest-12\\test_paper_qa_pipeline_returns0\\paper.md",
+        "source_name": "paper.md",
+        "source_type": "md",
+        "section_title": "# Hybrid Retrieval Study",
+        "page": null,
+        "chunk_index": 0,
+        "char_start": 0,
+        "char_end": 223
+      }
+    }
+  ],
+  "research_notes": "研究笔记：混合检索结合 semantic similarity 和 sparse retrieval。",
+  "user_profile": {
+    "user_id": "tester",
+    "language": "Chinese",
+    "format": "structured",
+    "tone": "academic",
+    "interests": []
+  },
+  "selected_skill": {
+    "name": "literature_review",
+    "description": "academic paper survey workflow",
+    "match_keywords": [
+      "调研",
+      "文献",
+      "综述",
+      "compare",
+      "survey",
+      "trend"
+    ],
+    "steps": [
+      "retrieve papers",
+      "summarize methods",
+      "compare approaches",
+      "generate conclusion"
+    ],
+    "output_style": "academic"
+  },
+  "final_report": "研究笔记：混合检索结合 semantic similarity 和 sparse retrieval。",
+  "final_answer": "研究笔记：混合检索结合 semantic similarity 和 sparse retrieval。",
+  "final_synthesis": "研究笔记：混合检索结合 semantic similarity 和 sparse retrieval。",
+  "citations": [
+    {
+      "id": "S1",
+      "source": "D:\\TMP\\pytest-of-不知茗\\pytest-12\\test_paper_qa_pipeline_returns0\\paper.md",
+      "source_name": "paper.md",
+      "page": null,
+      "chunk_index": 0,
+      "section_title": "# Hybrid Retrieval Study",
+      "excerpt": "# Hybrid Retrieval Study\n\nThe core contribution is a hybrid retrieval pipeline that combines semantic similarity with sparse retrieval.\nThe experiments show better grounding and citation quality than "
+    }
+  ],
+  "turns": [],
+  "active_document": {
+    "file_path": "D:\\TMP\\pytest-of-不知茗\\pytest-12\\test_paper_qa_pipeline_returns0\\paper.md",
+    "source_type": "md",
+    "index_scope": "single_file"
+  },
+  "retrieval_scope": {
+    "mode": "single_file",
+    "persist_dir": "D:\\C\\简历文件\\agent-project-research-github\\data\\vector_store\\files\\494050893c75b02efe9d226fea108cd0",
+    "file_path": "D:\\TMP\\pytest-of-不知茗\\pytest-12\\test_paper_qa_pipeline_returns0\\paper.md",
+    "rebuild": true,
+    "top_k": 2
+  },
+  "search_queries": [],
+  "search_plan": {},
+  "query_batches": [],
+  "survey_candidates": [],
+  "selected_surveys": [],
+  "paper_candidates": [],
+  "selected_papers": [],
+  "paper_notes": [],
+  "working_document_id": "paper-qa-test",
+  "working_document": {},
+  "survey_artifact": {},
+  "memory_summary": "论文：D:\\TMP\\pytest-of-不知茗\\pytest-12\\test_paper_qa_pipeline_returns0\\paper.md",
+  "conversation_summary_middle": "",
+  "initial_user_question": "这篇论文的核心贡献是什么？",
+  "open_questions": [],
+  "evidence_gaps": [],
+  "long_term_memories": [],
+  "pending_memory_candidates": [
+    {
+      "memory_type": "summary",
+      "content": "hybrid retrieval pipeline"
+    }
+  ],
+  "selected_paper_fulltext_docs": [],
+  "resume_from_checkpoint": false,
+  "exit_requested": false,
+  "awaiting_memory_confirmation": true
+}
