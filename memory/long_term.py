@@ -154,18 +154,6 @@ def save_session_artifact(session_id: str, artifact_type: str, content: dict[str
 
 
 
-def fetch_session_artifact(session_id: str, artifact_type: str, db_path: str) -> dict[str, Any] | None:
-    with sqlite3.connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT content_json FROM session_artifacts WHERE session_id = ? AND artifact_type = ? ORDER BY updated_at DESC LIMIT 1",
-            (session_id, artifact_type),
-        ).fetchone()
-    if row is None:
-        return None
-    return json.loads(row[0])
-
-
-
 def _row_to_memory(row: tuple[Any, ...]) -> dict[str, Any]:
     return {
         "item_id": row[0],

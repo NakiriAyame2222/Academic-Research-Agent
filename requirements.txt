@@ -15,3 +15,9 @@ fastmcp>=0.1.0
 # 检索增强：均为可选，未安装时代码自动降级
 chromadb>=0.5.0
 jieba>=0.42.1
+
+# Web 适配层（api/）：FastAPI + SSE。装好后 tests/test_api.py 才会运行，否则自动 skip。
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+sse-starlette>=2.1.0
+python-multipart>=0.0.9      # 文件上传（/api/papers/upload）必需

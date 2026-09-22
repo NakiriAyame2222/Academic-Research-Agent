@@ -82,25 +82,31 @@ class SimpleLLMResponse:
         self.content = content
 
 
-def _build_http_client(proxy_setting: str):
+def _build_http_client(proxy_setting: str, timeout: float | None = None):
     """按 RESEARCH_AGENT_PROXY 构造 httpx client。
 
-    默认（未设置）返回 None，即沿用 openai SDK 的默认行为（读取环境/系统代理）。
-    设为 none/off/0 时绕过系统代理 —— Windows 注册表里常见的
-    `https=https://127.0.0.1:7890`（Clash 混合端口其实只监听 http）会让 httpx
-    对本地代理发起 TLS 握手并直接失败，这个开关用于绕开这类错配。
-    也可以直接写一个代理 URL 显式指定。
+    关键：**默认 trust_env=False**，即不读取环境/系统代理。Windows 注册表里常见的
+    `https=https://127.0.0.1:7890`（Clash 混合端口其实只监听 http）会让 httpx 对本地
+    代理发起 TLS 握手并直接失败（ConnectError: EOF occurred in violation of protocol）。
+    本项目访问的是显式配置的 base_url，本就不该经过系统代理，所以默认直连——
+    改动前这里默认返回 None（沿用 SDK 的 trust_env=True），正是"频繁连接失败"的根因。
+
+    RESEARCH_AGENT_PROXY 的取值：
+    - 未设置 / none / off / 0 / false / direct → 直连，绕过系统代理（默认，推荐）
+    - system / env / environment              → 恢复旧行为，信任系统/环境代理
+    - 其它任意值                              → 当成代理 URL 显式指定
     """
-    normalized = (proxy_setting or "").strip()
-    if not normalized:
-        return None
     try:
         import httpx
     except ImportError:  # pragma: no cover - openai 依赖 httpx，正常装不缺
         return None
-    if normalized.lower() in {"none", "off", "0", "false", "direct"}:
-        return httpx.Client(trust_env=False, timeout=DEFAULT_REQUEST_TIMEOUT)
-    return httpx.Client(trust_env=False, proxy=normalized, timeout=DEFAULT_REQUEST_TIMEOUT)
+    normalized = (proxy_setting or "").strip()
+    effective_timeout = timeout or DEFAULT_REQUEST_TIMEOUT
+    if normalized.lower() in {"system", "env", "environment"}:
+        return httpx.Client(trust_env=True, timeout=effective_timeout)
+    if normalized and normalized.lower() not in {"none", "off", "0", "false", "direct"}:
+        return httpx.Client(trust_env=False, proxy=normalized, timeout=effective_timeout)
+    return httpx.Client(trust_env=False, timeout=effective_timeout)
 
 
 def _client_kwargs(api_key: str, base_url: str, proxy_setting: str = "", timeout: float | None = None) -> dict[str, Any]:
@@ -108,7 +114,7 @@ def _client_kwargs(api_key: str, base_url: str, proxy_setting: str = "", timeout
     normalized_base_url = normalize_openai_base_url(base_url)
     if normalized_base_url:
         kwargs["base_url"] = normalized_base_url
-    http_client = _build_http_client(proxy_setting)
+    http_client = _build_http_client(proxy_setting, timeout)
     if http_client is not None:
         kwargs["http_client"] = http_client
     return kwargs
@@ -237,12 +243,16 @@ def apply_config_values(values: dict[str, str]) -> None:
         "Embedding_BASE_URL": "RESEARCH_AGENT_EMBEDDING_BASE_URL",
         "PROXY": "RESEARCH_AGENT_PROXY",
         "Proxy": "RESEARCH_AGENT_PROXY",
+        "MAX_RESEARCH_ROUNDS": "RESEARCH_AGENT_MAX_RESEARCH_ROUNDS",
+        "DEFAULT_TOP_K": "RESEARCH_AGENT_DEFAULT_TOP_K",
         "RESEARCH_AGENT_LLM_MODEL": "RESEARCH_AGENT_LLM_MODEL",
         "RESEARCH_AGENT_API_KEY": "RESEARCH_AGENT_API_KEY",
         "RESEARCH_AGENT_BASE_URL": "RESEARCH_AGENT_BASE_URL",
         "RESEARCH_AGENT_EMBEDDING_MODEL": "RESEARCH_AGENT_EMBEDDING_MODEL",
         "RESEARCH_AGENT_EMBEDDING_API_KEY": "RESEARCH_AGENT_EMBEDDING_API_KEY",
         "RESEARCH_AGENT_EMBEDDING_BASE_URL": "RESEARCH_AGENT_EMBEDDING_BASE_URL",
+        "RESEARCH_AGENT_MAX_RESEARCH_ROUNDS": "RESEARCH_AGENT_MAX_RESEARCH_ROUNDS",
+        "RESEARCH_AGENT_DEFAULT_TOP_K": "RESEARCH_AGENT_DEFAULT_TOP_K",
     }
     for key, target_key in mapping.items():
         if key in values and values[key]:
@@ -259,6 +269,10 @@ def persist_config_values(values: dict[str, str], file_path: str | None = None) 
         "EMBEDDING_MODEL": values.get("EMBEDDING_MODEL") or values.get("Embedding_MODEL") or values.get("RESEARCH_AGENT_EMBEDDING_MODEL") or "",
         "EMBEDDING_API_KEY": values.get("EMBEDDING_API_KEY") or values.get("Embedding_API_KEY") or values.get("RESEARCH_AGENT_EMBEDDING_API_KEY") or "",
         "EMBEDDING_BASE_URL": values.get("EMBEDDING_BASE_URL") or values.get("Embedding_BASE_URL") or values.get("RESEARCH_AGENT_EMBEDDING_BASE_URL") or "",
+        # 运行参数（Web 设置面板也会写这些键；重写文件时必须带上，否则保存一次就把它们抹掉了）
+        "MAX_RESEARCH_ROUNDS": values.get("MAX_RESEARCH_ROUNDS") or values.get("RESEARCH_AGENT_MAX_RESEARCH_ROUNDS") or "",
+        "DEFAULT_TOP_K": values.get("DEFAULT_TOP_K") or values.get("RESEARCH_AGENT_DEFAULT_TOP_K") or "",
+        "PROXY": values.get("PROXY") or values.get("RESEARCH_AGENT_PROXY") or "",
     }
     content = "\n".join(f"{key}={value}" for key, value in normalized.items() if value)
     target.write_text(content + ("\n" if content else ""), encoding="utf-8")
@@ -281,6 +295,8 @@ def load_default_config_file() -> None:
         "Embedding_BASE_URL": "RESEARCH_AGENT_EMBEDDING_BASE_URL",
         "PROXY": "RESEARCH_AGENT_PROXY",
         "Proxy": "RESEARCH_AGENT_PROXY",
+        "MAX_RESEARCH_ROUNDS": "RESEARCH_AGENT_MAX_RESEARCH_ROUNDS",
+        "DEFAULT_TOP_K": "RESEARCH_AGENT_DEFAULT_TOP_K",
     }
     for source_key, target_key in mapping.items():
         if os.getenv(target_key):
@@ -306,7 +322,7 @@ def get_settings() -> dict[str, Any]:
         "sqlite_db_path": data_dir / "memory.db",
         "skills_dir": PROJECT_ROOT / "skills",
         "reports_dir": data_dir / "reports",
-        "default_top_k": 4,
+        "default_top_k": int(os.getenv("RESEARCH_AGENT_DEFAULT_TOP_K") or 4),
         "chunk_size": 1000,
         "chunk_overlap": 200,
         "llm_model": os.getenv("RESEARCH_AGENT_LLM_MODEL", "gpt-4o-mini"),

@@ -159,6 +159,7 @@ def run_research(
     top_k: int | None = None,
     resume: bool = False,
     progress_callback: Callable[[str], None] | None = None,
+    progress_event_callback: Callable[[dict[str, Any]], None] | None = None,
     output_path: str | None = None,
 ) -> dict[str, Any]:
     resolved_file_path = resolve_file_path(query, file_path)
@@ -187,6 +188,7 @@ def run_research(
     state["resume_from_checkpoint"] = resume
     state["paper_path"] = resolved_file_path or state.get("paper_path", "")
     state["progress_callback"] = progress_callback
+    state["progress_event_callback"] = progress_event_callback
     state["output_path"] = output_path or ""
     state["retrieval_scope"] = {
         "mode": "single_file" if intent_mode == "paper_qa" and resolved_file_path else "corpus",
@@ -294,6 +296,9 @@ def main() -> None:
     parser.add_argument("--mcp-transport", default="stdio", choices=["stdio", "http"], help="MCP transport")
     parser.add_argument("--mcp-host", default="127.0.0.1", help="MCP host (http transport only)")
     parser.add_argument("--mcp-port", type=int, default=8000, help="MCP port (http transport only)")
+    parser.add_argument("--serve-web", action="store_true", help="Start the Web UI (FastAPI + built frontend) instead of the chat loop")
+    parser.add_argument("--web-host", default="127.0.0.1", help="Web UI host")
+    parser.add_argument("--web-port", type=int, default=8000, help="Web UI port")
     parser.add_argument("--config-file", help="Load model config from a KEY=VALUE file")
     parser.add_argument("--save-config", action="store_true", help="Persist provided model settings for future runs")
     parser.add_argument("--model", help="Override LLM model for this run")
@@ -330,6 +335,22 @@ def main() -> None:
         from mcp_server.server import run_server
 
         run_server(transport=args.mcp_transport, host=args.mcp_host, port=args.mcp_port)
+        return
+
+    # 默认（无任何模式参数且没给任务/query）直接起 Web，降低使用门槛；
+    # 传了 task 或 --chat 仍走原 CLI 行为。
+    should_serve_web = args.serve_web or (not args.task and not args.chat)
+    if should_serve_web:
+        # 与 --serve-mcp 对齐的 Web 入口。RESEARCH_AGENT_FAKE=1 走假模式，不碰 LLM。
+        import uvicorn
+
+        print(f"Web UI: http://{args.web_host}:{args.web_port}  （按 Ctrl+C 退出；用 --chat 进入 CLI 对话模式）")
+        uvicorn.run(
+            "api.main:app",
+            host=args.web_host,
+            port=args.web_port,
+            workers=1,  # Chroma 多进程写同一目录不安全（坑 3），必须单进程
+        )
         return
 
     if args.chat:
