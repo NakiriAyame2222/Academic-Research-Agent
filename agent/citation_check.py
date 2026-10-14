@@ -1,11 +1,3 @@
-"""引用事后校验。
-
-改动前：报告里的 [Sx] 编号完全没有校验，模型写错编号或凭空造一个 [S9] 不会被发现，
-而 state["citations"] 里其实已经有完整的引用元数据了。
-
-现在：正则提取全部 [Sx] -> 与真实 citations 比对 -> 标注非法编号 -> 缺失
-Sources 小节时用真实 citations 补齐 -> 审计结果写进 state["citation_audit"]。
-"""
 from __future__ import annotations
 
 import re

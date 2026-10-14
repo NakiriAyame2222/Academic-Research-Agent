@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG_FILE = PROJECT_ROOT / "data" / "llm_config.env"
@@ -22,7 +23,9 @@ def normalize_openai_base_url(base_url: str) -> str:
     normalized = (base_url or "").strip().rstrip("/")
     if not normalized:
         return ""
-    if normalized.endswith("/v1"):
+    # 已带路径（如 /v1、Gemini 的 /v1beta/openai）就原样返回，只给"裸主机名"补 /v1。
+    # 否则会把 Gemini 兼容端点补成 .../v1beta/openai/v1 导致 404。
+    if urlsplit(normalized).path.strip("/"):
         return normalized
     return normalized + "/v1"
 
@@ -125,6 +128,8 @@ class OpenAICompatibleLLM:
         from openai import OpenAI
 
         self.client = OpenAI(**_client_kwargs(api_key, base_url, proxy, timeout))
+        # LLM 重试由 agent.llm 统一管理，避免 SDK 内部重试放大 10 次预算。
+        self.client.max_retries = 0
         self.model = model
 
     def _create(self, payload: dict[str, Any]) -> Any:
@@ -320,7 +325,6 @@ def get_settings() -> dict[str, Any]:
         "vector_store_corpus_dir": vector_root / "corpus",
         "vector_store_files_dir": vector_root / "files",
         "sqlite_db_path": data_dir / "memory.db",
-        "skills_dir": PROJECT_ROOT / "skills",
         "reports_dir": data_dir / "reports",
         "default_top_k": int(os.getenv("RESEARCH_AGENT_DEFAULT_TOP_K") or 4),
         "chunk_size": 1000,
@@ -335,7 +339,6 @@ def get_settings() -> dict[str, Any]:
         "proxy": (os.getenv("RESEARCH_AGENT_PROXY") or "").strip(),
         "request_timeout": float(os.getenv("RESEARCH_AGENT_REQUEST_TIMEOUT") or DEFAULT_REQUEST_TIMEOUT),
         "llm_compression_enabled": (os.getenv("RESEARCH_AGENT_LLM_COMPRESSION") or "1").strip() not in {"0", "false", "no"},
-        "llm_preferences_enabled": (os.getenv("RESEARCH_AGENT_LLM_PREFERENCES") or "1").strip() not in {"0", "false", "no"},
         "tool_calling_enabled": (os.getenv("RESEARCH_AGENT_TOOL_CALLING") or "1").strip() not in {"0", "false", "no"},
         "max_research_rounds": int(os.getenv("RESEARCH_AGENT_MAX_RESEARCH_ROUNDS") or 2),
         "default_config_file": DEFAULT_CONFIG_FILE,
@@ -351,7 +354,6 @@ def ensure_directories(settings: dict[str, Any]) -> None:
         settings["vector_store_corpus_dir"],
         settings["vector_store_files_dir"],
         settings["reports_dir"],
-        settings["skills_dir"],
     ]
     for directory in directories:
         Path(directory).mkdir(parents=True, exist_ok=True)

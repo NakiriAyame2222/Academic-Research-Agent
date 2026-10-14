@@ -19,7 +19,7 @@ _STAGES: list[tuple[str, str]] = [
     ("research", "逐篇精读并整理研究笔记"),
     ("reflect", "反思证据充分性：第 1 轮通过"),
     ("report", "逐节撰写研究报告"),
-    ("memory", "抽取长期记忆候选"),
+    ("memory", "保存研究产物"),
 ]
 
 
@@ -124,9 +124,7 @@ def _canned_final_state(session_id: str) -> dict[str, Any]:
                 "summary": "提出隐变量框架，将推理轨迹与答案分布解耦。",
             }
         ],
-        "pending_memory_candidates": [
-            {"content": "用户关注 latent variable reasoning 的忠实性问题", "memory_type": "summary"}
-        ],
+        "pending_memory_candidates": [],
         # 故意塞服务器绝对路径，验证 serialize 会把它剔除。
         "report_path": r"D:\C\简历文件\learning_test_code\data\reports\fake_report.md",
         "output_path": r"D:\C\简历文件\learning_test_code\data\reports\fake_output.md",

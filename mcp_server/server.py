@@ -1,17 +1,3 @@
-"""对外暴露本地论文检索能力的 MCP server。
-
-目录名从 `mcp/` 改成 `mcp_server/`：官方 Python SDK 的包名也叫 `mcp`，
-同名目录会让 `import mcp` 的解析结果取决于 sys.path 顺序。
-
-改动前的三个问题：
-1. 零调用点 —— 没有 __main__ 入口，CLI 也不调它；
-2. 索引参数指错 —— data_dir 给的是整个 data/（会把 reports/ 和 downloads/ 全扫进语料），
-   persist_dir 给的是 vector_store/ 根目录（CLI 主流程用的是子目录 vector_store/corpus）；
-3. run() 用 try/except TypeError 猜传输方式。
-
-现在：与 CLI 共用 papers_dir + vector_store_corpus_dir 同一份索引，
-默认走 FastMCP 的 stdio，只有显式 http 传输才传 host/port。
-"""
 from __future__ import annotations
 
 import argparse
@@ -43,7 +29,7 @@ class SimpleMCPServer:
 
     def run(self) -> None:
         raise RuntimeError(
-            "未安装 fastmcp，无法启动 MCP server。请先执行 pip install fastmcp。\n"
+            "未安装 fastmcp，无法启动 MCP server。请先执行 pip install -r requirements-mcp.txt。\n"
             f"本 server 计划暴露的工具：{', '.join(self.tools)}"
         )
 
@@ -52,7 +38,7 @@ class SimpleMCPServer:
 
 
 def _ensure_corpus_index(rebuild: bool = False) -> str:
-    """初始化与 CLI 主流程一致的语料索引，返回 persist_dir。"""
+    """初始化与研究后端一致的语料索引，返回 persist_dir。"""
     settings = get_settings()
     ensure_directories(settings)
     persist_dir = settings["vector_store_corpus_dir"]

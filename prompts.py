@@ -2,27 +2,27 @@ from __future__ import annotations
 
 from typing import Any
 
-# 改动前所有角色设定都塞在唯一一条 user message 里，没有用 system role。
-# 这里把角色设定抽成常量，由 agent/llm.py 放进真正的 system message。
 PLANNER_SYSTEM = "你是一个学术研究任务规划助手，擅长把模糊的研究请求拆解成可执行的检索与分析计划。"
 REWRITE_SYSTEM = "你是一个学术问答检索改写助手，只输出改写后的查询本身。"
 SEARCH_PLAN_SYSTEM = "你是一个学术调研规划助手，只输出严格的 JSON 对象，不要附加解释文字。"
 QUERY_BATCH_SYSTEM = "你是一个 arXiv 检索 query 设计助手，只输出严格的 JSON 数组。"
+SELECTOR_SYSTEM = "你是一个学术论文候选筛选助手，只依据论文元数据选择需要精读的论文，只输出严格的 JSON 对象。"
+REPORT_REVIEW_SYSTEM = "你是一个独立的研究报告评审助手，只依据总主题、子主题、报告和最终证据评审报告，只输出严格的 JSON 对象。"
 NOTE_SYSTEM = "你是一个学术论文笔记抽取助手，只输出严格的 JSON 对象。"
 RESEARCH_SYSTEM = "你是一个学术研究分析助手，只依据给定证据写作，不要编造未出现的内容。"
 ANSWER_SYSTEM = "你是一个学术研究问答助手，回答必须可溯源，每个核心论断都要带 [Sx] 证据编号。"
-MEMORY_SYSTEM = "你是一个长期记忆筛选助手，只输出严格的 JSON 数组。"
 REFLECT_SYSTEM = "你是一个研究证据审查员，负责判断现有证据能否支撑结论，只输出严格的 JSON 对象。"
 SURVEY_OUTLINE_SYSTEM = "你是一个学术综述大纲生成助手，只输出严格的 JSON 数组。"
 SURVEY_SECTION_SYSTEM = "你是一个学术综述写作助手，按给定章节撰写内容并保留证据编号。"
 COMPRESSION_SYSTEM = "你是一个对话上下文压缩助手，负责在压缩的同时保住关键事实。"
-PREFERENCE_SYSTEM = "你是一个用户偏好抽取助手，只输出严格的 JSON 对象。"
 
 # 每个 prompt 首行都带唯一任务标记，便于日志定位与测试分派
 TASK_PLANNER = "任务标记：planner_plan"
 TASK_QUERY_REWRITE = "任务标记：query_rewrite"
 TASK_SEARCH_PLAN = "任务标记：search_plan"
 TASK_QUERY_BATCH = "任务标记：query_batches"
+TASK_PAPER_SELECTION = "任务标记：paper_selection"
+TASK_REPORT_REVIEW = "任务标记：report_review"
 TASK_TOPIC_AGENT = "任务标记：topic_agent_goal"
 TASK_PAPER_QA_AGENT = "任务标记：paper_qa_agent_goal"
 TASK_PAPER_NOTE = "任务标记：paper_note_brief"
@@ -32,9 +32,7 @@ TASK_REFLECTION = "任务标记：evidence_reflection"
 TASK_SURVEY_OUTLINE = "任务标记：survey_outline"
 TASK_SURVEY_SECTION = "任务标记：survey_section"
 TASK_FINAL_ANSWER = "任务标记：final_answer"
-TASK_MEMORY_SELECTION = "任务标记：memory_selection"
 TASK_MIDDLE_SUMMARY = "任务标记：context_compression"
-TASK_PREFERENCES = "任务标记：preference_extraction"
 
 TOPIC_AGENT_SYSTEM = (
     "你是一个学术调研 agent，可以自主调用工具来收集证据。\n"
@@ -78,7 +76,7 @@ def _format_context_layers(initial_question: str, middle_summary: str, recent_me
 def get_planner_prompt(
     query: str,
     user_profile: dict[str, Any],
-    skill: dict[str, Any],
+    template: dict[str, Any],
     mode: str,
     initial_question: str = "",
     middle_summary: str = "",
@@ -89,9 +87,9 @@ def get_planner_prompt(
         f"当前模式：{mode}\n"
         f"用户问题：{query}\n"
         f"用户偏好：{user_profile}\n"
-        f"选中技能：{skill.get('name', '未选中')}\n"
-        f"技能说明：{skill.get('description', '无')}\n"
-        f"技能步骤：{skill.get('steps', [])}\n\n"
+        f"写作模板：{template.get('name', '未选中')}\n"
+        f"模板说明：{template.get('description', '无')}\n"
+        f"写作要求：{template.get('guidelines', [])}\n\n"
         f"上下文如下：\n{_format_context_layers(initial_question, middle_summary, recent_messages or [])}\n\n"
         "请输出简洁执行规划，说明应该如何检索、分析和组织回答。"
     )
@@ -130,6 +128,54 @@ def get_query_batch_prompt(topic: str, search_plan: dict[str, Any]) -> str:
         "请输出一个 JSON 数组，每个元素包含 label 和 query 两个字段，"
         "覆盖 broad、survey、method、benchmark、application 等不同角度。"
         "query 必须是英文检索词（arXiv 只索引英文），不要直接使用中文原句。"
+    )
+
+
+def get_candidate_selection_prompt(
+    topic: str,
+    subtopics: list[str],
+    candidates: list[dict[str, Any]],
+    evidence_gaps: list[str] | None = None,
+) -> str:
+    """Fresh-context prompt: metadata only, no search/tool history."""
+    compact = []
+    for item in candidates:
+        compact.append({
+            key: item.get(key, "")
+            for key in ("candidate_id", "arxiv_id", "title", "abstract", "summary", "authors", "published", "categories", "keywords", "subtopic", "source_type", "entry_url", "pdf_url")
+            if item.get(key) not in (None, "", [], {})
+        })
+    return (
+        f"{TASK_PAPER_SELECTION}\n"
+        f"总主题：{topic}\n"
+        f"子主题：{subtopics}\n"
+        "以下仅是论文元数据，不包含全文。请从中选择真正值得全文精读的论文。\n"
+        "选择数量由你根据相关性、覆盖度、代表性和证据质量自行决定；可以少于候选数，但绝不能超过 60 篇。\n"
+        "如果发现覆盖缺口，请给出新的英文检索词；不要重复已有查询。\n"
+        "输出 JSON：{selected_count, selected_candidates, evidence_gaps, additional_english_queries, rationale}\n"
+        f"已有证据缺口：{evidence_gaps or []}\n"
+        f"候选元数据：{compact}"
+    )
+
+
+def get_report_review_prompt(
+    topic: str,
+    subtopics: list[str],
+    report: str,
+    paper_notes: list[dict[str, Any]],
+    citations: list[dict[str, Any]],
+) -> str:
+    """Fresh-context prompt for independent report review."""
+    return (
+        f"{TASK_REPORT_REVIEW}\n"
+        f"总主题：{topic}\n"
+        f"子主题：{subtopics}\n"
+        "你是独立评审者。不要假设自己看过搜索过程，也不要使用搜索 LLM 的历史。\n"
+        "检查：是否覆盖子主题、结论是否由最终论文证据支持、数据集/评判标准是否区分清楚、是否存在无依据断言。\n"
+        "输出 JSON：{sufficient, evidence_gaps, issues, reason, revision_instructions}\n"
+        f"最终论文笔记：{paper_notes}\n"
+        f"最终引用证据：{citations}\n"
+        f"报告正文：\n{report}"
     )
 
 
@@ -226,7 +272,7 @@ def get_reflection_prompt(
 def get_research_prompt(
     query: str,
     docs_text: str,
-    skill_steps: list[str],
+    writing_guidelines: list[str],
     mode: str,
     initial_question: str,
     middle_summary: str,
@@ -240,7 +286,7 @@ def get_research_prompt(
         "请基于检索资料生成结构化研究笔记。\n"
         f"模式：{mode}\n"
         f"当前问题：{query}\n"
-        f"技能步骤：{skill_steps}\n"
+        f"写作要求：{writing_guidelines}\n"
         f"本轮执行规划（由规划节点产出，请据此组织笔记）：\n{task_plan or '无'}\n"
         "请优先回答当前问题，并保留资料中的具体证据位置。\n\n"
         f"{_format_context_layers(initial_question, middle_summary, recent_messages)}\n\n"
@@ -334,6 +380,8 @@ def get_survey_section_prompt(topic: str, section_title: str, evidence_text: str
         f"研究主题：{topic}\n"
         f"当前章节：{section_title}\n"
         f"综述整体章节：{working_document.get('report_outline', [])}\n"
+        f"输出偏好：{working_document.get('user_profile', {})}\n"
+        f"写作要求：{working_document.get('report_template', {}).get('guidelines', [])}\n"
         f"代表论文：{[note.get('title', '') for note in working_document.get('paper_notes_fulltext', [])]}\n"
         f"证据与笔记：\n{evidence_text}\n\n"
         f"请只撰写「{section_title}」这一节的正文（不要重复写其他章节，不要写标题行）。"
@@ -356,30 +404,3 @@ def get_middle_summary_prompt(initial_question: str, middle_messages: list[dict[
     )
 
 
-def get_preference_extraction_prompt(task: str, report: str, current_preferences: dict[str, Any]) -> str:
-    return (
-        f"{TASK_PREFERENCES}\n"
-        "请从用户的请求与本轮产出中推断用户的输出偏好。\n"
-        f"用户请求：{task}\n"
-        f"本轮产出（截断）：{report[:1200]}\n"
-        f"当前已记录的偏好：{current_preferences}\n\n"
-        "请输出 JSON 对象，仅可包含以下字段与取值：\n"
-        '- language: "chinese" | "english"\n'
-        '- format: "structured" | "table" | "markdown" | "bullet" | "narrative"\n'
-        '- tone: "academic" | "concise" | "neutral" | "tutorial"\n'
-        '- depth: "overview" | "standard" | "deep"\n'
-        "- interests: 字符串数组，用户关注的研究方向关键词（小写，最多 8 个）\n"
-        "没有把握的字段直接省略，不要输出取值范围之外的值，不要输出解释文字。"
-    )
-
-
-def get_memory_selection_prompt(topic: str, notes: list[dict[str, Any]], final_answer: str = "", user_profile: dict[str, Any] | None = None) -> str:
-    return (
-        f"{TASK_MEMORY_SELECTION}\n"
-        f"当前研究主题：{topic}\n"
-        f"候选研究笔记：{notes}\n"
-        f"最终回答：{final_answer}\n"
-        f"用户偏好：{user_profile or {}}\n\n"
-        "请输出一个 JSON 数组，每个元素包含 memory_type 和 content 两个字段。"
-        "每条内容都要简短、可长期复用，适合保存为用户偏好或研究摘要。最多输出 5 条。"
-    )

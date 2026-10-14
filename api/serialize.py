@@ -3,10 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-# ResearchState 里有 7 个字段只在运行时动态写入（不在 TypedDict 声明里）：
-# citation_audit / tool_trace / tool_loop_degraded / evidence_status /
-# research_rounds / report_path / output_path。降级或短路的运行可能根本没写它们，
-# 因此一律 .get(..., 默认) 防御式读取。
 
 
 def _trim_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -57,7 +53,11 @@ def serialize_state(
     return {
         "session_id": session_id or state.get("session_id", ""),
         "intent_mode": state.get("intent_mode", ""),
-        # CLI 里最终答案可能落在 final_answer 或 final_report，对齐 run_chat_loop 的取值顺序
+        "discussion_intent": state.get("discussion_intent", ""),
+        "discussion": state.get("discussion"),
+        "discussion_scope": state.get("discussion_scope"),
+        "discussion_sources": state.get("discussion_sources") or [],
+        # 兼容问答与主题调研的最终答案字段。
         "final_answer": state.get("final_answer") or state.get("final_report") or "",
         "survey_artifact": state.get("survey_artifact") or {},
         "citations": _trim_citations(state.get("citations") or []),

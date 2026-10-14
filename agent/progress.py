@@ -22,7 +22,7 @@ def emit_progress(
     if state is None:
         return
 
-    # 结构化事件回调（Web 层用）：与字符串回调互不影响，CLI 不设置时不触发。
+    # 结构化事件回调供 Web 推送进度；字符串回调仍可用于后端诊断。
     event_callback = state.get("progress_event_callback")
     if callable(event_callback):
         event_callback(
