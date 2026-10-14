@@ -5,8 +5,6 @@ from typing import Any
 
 import yaml
 
-# yaml 里的 output_style 之前从未被读取，与 SQLite 的 user_preferences.tone 是两套
-# 互不相干的机制。这里把它映射到同一套输出偏好上（用户显式偏好优先级更高）。
 OUTPUT_STYLE_PREFERENCES: dict[str, dict[str, str]] = {
     "academic": {"tone": "academic", "format": "structured"},
     "structured": {"tone": "neutral", "format": "structured"},

@@ -8,14 +8,11 @@ from urllib.parse import urlsplit
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG_FILE = PROJECT_ROOT / "data" / "llm_config.env"
 
-# 中转端点未必支持 tools / response_format。首次被拒后把参数名记进来，
-# 后续请求自动脱掉该参数，让整条链降级到手工 JSON mode 而不是直接崩。
 _UNSUPPORTED_PARAMS: set[str] = set()
 _DEGRADE_NOTICES: list[str] = []
 _LLM_CACHE: dict[tuple[str, str, str, str], Any] = {}
 _EMBEDDER_CACHE: dict[tuple[str, str, str, str], Any] = {}
 
-# 中转端点常常很慢（thinking 模型尤甚），默认给足超时并允许重试
 DEFAULT_REQUEST_TIMEOUT = 180.0
 
 
@@ -23,8 +20,6 @@ def normalize_openai_base_url(base_url: str) -> str:
     normalized = (base_url or "").strip().rstrip("/")
     if not normalized:
         return ""
-    # 已带路径（如 /v1、Gemini 的 /v1beta/openai）就原样返回，只给"裸主机名"补 /v1。
-    # 否则会把 Gemini 兼容端点补成 .../v1beta/openai/v1 导致 404。
     if urlsplit(normalized).path.strip("/"):
         return normalized
     return normalized + "/v1"
@@ -86,19 +81,6 @@ class SimpleLLMResponse:
 
 
 def _build_http_client(proxy_setting: str, timeout: float | None = None):
-    """按 RESEARCH_AGENT_PROXY 构造 httpx client。
-
-    关键：**默认 trust_env=False**，即不读取环境/系统代理。Windows 注册表里常见的
-    `https=https://127.0.0.1:7890`（Clash 混合端口其实只监听 http）会让 httpx 对本地
-    代理发起 TLS 握手并直接失败（ConnectError: EOF occurred in violation of protocol）。
-    本项目访问的是显式配置的 base_url，本就不该经过系统代理，所以默认直连——
-    改动前这里默认返回 None（沿用 SDK 的 trust_env=True），正是"频繁连接失败"的根因。
-
-    RESEARCH_AGENT_PROXY 的取值：
-    - 未设置 / none / off / 0 / false / direct → 直连，绕过系统代理（默认，推荐）
-    - system / env / environment              → 恢复旧行为，信任系统/环境代理
-    - 其它任意值                              → 当成代理 URL 显式指定
-    """
     try:
         import httpx
     except ImportError:  # pragma: no cover - openai 依赖 httpx，正常装不缺
