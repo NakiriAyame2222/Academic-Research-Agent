@@ -6,7 +6,7 @@
 
 ## 演示视频
 
-<video src="demo.mp4" controls width="100%"></video>
+https://github.com/user-attachments/assets/9d3b3449-e64d-493e-8bb5-715303a6c3be
 
 > 无法内嵌播放时，可 [下载 demo.mp4](demo.mp4) 观看。视频演示了一次完整的深度调研流程：主题规划 → 多子主题并发取证 → 实时进度流 → 运行中动态指令 → 报告生成与引用高亮 → 报告讨论。
 
