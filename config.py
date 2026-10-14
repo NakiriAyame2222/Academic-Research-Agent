@@ -20,7 +20,7 @@ def normalize_openai_base_url(base_url: str) -> str:
     normalized = (base_url or "").strip().rstrip("/")
     if not normalized:
         return ""
-    if urlsplit(normalized).path.strip("/"):
+    if normalized.endswith("/v1"):
         return normalized
     return normalized + "/v1"
 
