@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -18,6 +20,33 @@ from config import (
 )
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+
+class OutputPreferences(BaseModel):
+    language: Literal["Chinese", "English"] = "Chinese"
+    format: Literal["structured", "table", "markdown", "bullet", "narrative"] = "structured"
+    tone: Literal["academic", "concise", "neutral", "tutorial"] = "academic"
+    depth: Literal["overview", "standard", "deep"] = "standard"
+
+
+@router.get("/preferences", response_model=OutputPreferences)
+def view_preferences() -> OutputPreferences:
+    from memory.long_term import get_user_preferences, init_db
+
+    db_path = str(get_settings()["sqlite_db_path"])
+    init_db(db_path)
+    return OutputPreferences(**get_user_preferences("default", db_path))
+
+
+@router.post("/preferences", response_model=OutputPreferences)
+def update_preferences(preferences: OutputPreferences) -> OutputPreferences:
+    from memory.long_term import get_user_preferences, init_db, update_user_preferences
+
+    db_path = str(get_settings()["sqlite_db_path"])
+    init_db(db_path)
+    existing = get_user_preferences("default", db_path)
+    update_user_preferences("default", {**existing, **preferences.model_dump()}, db_path)
+    return preferences
 
 
 def _mask(secret: str) -> str:

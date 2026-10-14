@@ -1,3 +1,8 @@
+"""Web 层的多轮对话历史。
+
+run_research 的 checkpoint 只存 user 消息（assistant 回复不落 messages），
+对话流由这里单独记账：data/conversations/<sid>.json，每轮 append。
+"""
 from __future__ import annotations
 
 import json

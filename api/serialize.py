@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+# ResearchState 里有 7 个字段只在运行时动态写入（不在 TypedDict 声明里）：
+# citation_audit / tool_trace / tool_loop_degraded / evidence_status /
+# research_rounds / report_path / output_path。降级或短路的运行可能根本没写它们，
+# 因此一律 .get(..., 默认) 防御式读取。
 
 
 def _trim_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:

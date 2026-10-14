@@ -4,6 +4,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# 字段名与现有 state 严格对齐；来源见：
+# citations -> rag/retriever.py:build_citations
+# citation_audit -> agent/citation_check.py:audit_citations（真实结构是计划 schema 的超集）
+# tool_trace -> agent/tool_loop.py
+# evidence_status -> agent/nodes.py
+# 其余 -> agent/state.py
+
 
 class ResearchRequest(BaseModel):
     query: str = ""

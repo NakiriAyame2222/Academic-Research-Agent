@@ -35,8 +35,21 @@ def job_view(job_id: str, manager: JobManager = Depends(get_job_manager)) -> dic
 
 @router.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str, manager: JobManager = Depends(get_job_manager)) -> dict:
-    """v1 取消：标记 cancelled 并推终止帧；线程继续跑完但结果被丢弃。"""
+    """取消任务：设置取消标记，协同终止调度器及各子主题工作线程，并推终止帧。"""
     job = manager.cancel(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return {"job_id": job.id, "status": job.status.value}
+
+
+@router.post("/jobs/{job_id}/commands")
+def submit_job_command(
+    job_id: str,
+    request: dict[str, Any],
+    manager: JobManager = Depends(get_job_manager),
+) -> dict[str, Any]:
+    """向指定 job 发送控制指令。"""
+    job = manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return manager.submit_command(job_id, request)
