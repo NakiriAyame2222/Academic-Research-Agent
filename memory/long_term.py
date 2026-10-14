@@ -10,6 +10,7 @@ DEFAULT_PREFERENCES = {
     "language": "Chinese",
     "format": "structured",
     "tone": "academic",
+    "depth": "standard",
     "interests": [],
 }
 
@@ -304,41 +305,3 @@ def save_memory_item(user_id: str, topic: str, memory_type: str, content: str, s
 
 
 
-def extract_preferences_from_task(task: str, report: str) -> dict[str, Any]:
-    normalized_task = task.lower()
-    normalized_report = report.lower()
-    preferences: dict[str, Any] = {}
-
-    if "中文" in task or "chinese" in normalized_task:
-        preferences["language"] = "Chinese"
-    elif "英文" in task or "english" in normalized_task:
-        preferences["language"] = "English"
-
-    if "表格" in task or "compare" in normalized_task or "比较" in task:
-        preferences["format"] = "table"
-    elif "markdown" in normalized_task:
-        preferences["format"] = "markdown"
-    elif "报告" in task or "report" in normalized_task:
-        preferences["format"] = "structured"
-
-    if "academic" in normalized_task or "学术" in task or "论文" in task:
-        preferences["tone"] = "academic"
-    elif "brief" in normalized_task or "简洁" in task:
-        preferences["tone"] = "concise"
-
-    interests = []
-    for keyword in ["rag", "agent", "llm", "transformer", "知识管理", "arxiv", "survey"]:
-        if keyword in normalized_task or keyword in normalized_report:
-            interests.append(keyword)
-    if interests:
-        preferences["interests"] = sorted(set(interests))
-
-    return preferences
-
-
-
-def merge_preferences(old_prefs: dict[str, Any], new_prefs: dict[str, Any]) -> dict[str, Any]:
-    merged = {**old_prefs, **new_prefs}
-    merged_interests = set(old_prefs.get("interests", [])) | set(new_prefs.get("interests", []))
-    merged["interests"] = sorted(merged_interests)
-    return merged

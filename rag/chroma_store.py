@@ -1,12 +1,3 @@
-"""Chroma 向量库后端。
-
-RAG 首选走 Chroma（真正的向量数据库，持久化 + HNSW 近邻检索），
-chromadb 未安装 / 初始化失败 / 无 embedder 时由 rag/retriever.py 降级到
-原有的 SimpleVectorStore（纯 Python 手写实现）。
-
-稠密召回交给 Chroma，稀疏 TF-IDF 仍保留在本进程内，按 0.7 / 0.3 混合 ——
-与降级实现的打分语义保持一致，保证两个后端的检索质量可比。
-"""
 from __future__ import annotations
 
 import hashlib

@@ -8,6 +8,7 @@ from agent.intent import classify_intent
 from agent.json_utils import parse_json_dicts, parse_json_object, parse_string_list
 from agent.llm import drain_degrade_notices, take_last_error as take_last_llm_error
 from agent.llm import invoke_llm as _default_invoke_llm
+from agent.llm import retry_progress
 from agent.progress import emit_progress
 from agent.research_artifacts import (
     add_candidate_paper_notes,
@@ -28,39 +29,29 @@ from config import get_settings
 from memory.compression import attach_memory_summary
 from memory.long_term import (
     get_user_preferences,
-    merge_preferences,
     save_paper_note,
     save_session_artifact,
 )
-from memory.preferences import infer_preferences
+from memory.preferences import output_preferences_for_query
 from memory.retrieval import retrieve_relevant_long_term_memories
 from prompts import (
     ANSWER_SYSTEM,
-    MEMORY_SYSTEM,
-    NOTE_SYSTEM,
     PAPER_QA_AGENT_SYSTEM,
     PLANNER_SYSTEM,
     QUERY_BATCH_SYSTEM,
-    REFLECT_SYSTEM,
     RESEARCH_SYSTEM,
     REWRITE_SYSTEM,
     SEARCH_PLAN_SYSTEM,
     SURVEY_OUTLINE_SYSTEM,
-    SURVEY_SECTION_SYSTEM,
     TOPIC_AGENT_SYSTEM,
     get_answer_prompt,
-    get_fulltext_note_prompt,
-    get_memory_selection_prompt,
-    get_paper_note_prompt,
     get_paper_qa_agent_goal_prompt,
     get_planner_prompt,
     get_query_batch_prompt,
     get_query_rewrite_prompt,
-    get_reflection_prompt,
     get_research_prompt,
     get_search_plan_prompt,
     get_survey_outline_prompt,
-    get_survey_section_prompt,
     get_topic_agent_goal_prompt,
 )
 from rag.retriever import (
@@ -71,12 +62,10 @@ from rag.retriever import (
     retrieve_documents,
     take_backend_notices,
 )
-from skills.loader import (
-    get_skill_output_preferences,
-    get_skill_steps,
-    load_all_skills,
-    select_skill,
-)
+from report_templates import get_report_template
+from agent import research_service
+from agent.research_service import docs_for_paper as _docs_for_paper
+from agent.report_discussion import persist_research_context
 from tools.file import save_report
 from tools.registry import ToolContext, get_toolset
 from tools.search import build_selected_papers_index, search_academic_topic, search_papers
@@ -92,34 +81,53 @@ DEFAULT_OUTLINE = [
 ]
 
 MAX_FULLTEXT_PAPERS = 3
-_ARXIV_ID_CLEAN_PATTERN = re.compile(r"[^0-9a-zA-Z]+")
 
 
-def _invoke_llm(prompt: str, system: str | None = None, json_object: bool = False) -> str:
+def _invoke_llm(
+    prompt: str,
+    system: str | None = None,
+    json_object: bool = False,
+    cancel_event: Any | None = None,
+) -> str:
     """所有 LLM 调用的单一入口（测试通过 monkeypatch 这个名字来替身）。"""
-    return _default_invoke_llm(prompt, system=system, json_object=json_object)
+    return _default_invoke_llm(prompt, system=system, json_object=json_object, cancel_event=cancel_event)
 
 
-def _call_llm(prompt: str, system: str | None = None, json_object: bool = False) -> str:
+def _call_llm(
+    prompt: str,
+    system: str | None = None,
+    json_object: bool = False,
+    cancel_event: Any | None = None,
+) -> str:
     """兼容只接受单个 prompt 参数的替身实现。"""
     try:
-        return _invoke_llm(prompt, system=system, json_object=json_object)
+        return _invoke_llm(prompt, system=system, json_object=json_object, cancel_event=cancel_event)
     except TypeError:
-        return _invoke_llm(prompt)
+        try:
+            return _invoke_llm(prompt, system=system, json_object=json_object)
+        except TypeError:
+            return _invoke_llm(prompt)
 
 
 def _call_llm_with_progress(
-    state: dict[str, Any],
+    state: dict[str, Any] | None,
     stage: str,
     prompt: str,
     system: str | None = None,
     json_object: bool = False,
 ) -> str:
-    """带进度提示的 LLM 调用：网络类失败会被吞掉，这里把原因报出来。"""
-    text = _call_llm(prompt, system=system, json_object=json_object)
+    """带进度提示的 LLM 调用，并把能力降级提示转成进度事件。"""
+    state = state or {}
+    with retry_progress(lambda message: emit_progress(state, stage, message)):
+        text = _call_llm(
+            prompt,
+            system=system,
+            json_object=json_object,
+            cancel_event=state.get("cancel_event"),
+        )
     error = take_last_llm_error()
     if error:
-        emit_progress(state, stage, f"LLM 调用失败，本步走降级路径：{error}")
+        emit_progress(state, stage, error)
     for notice in drain_degrade_notices():
         emit_progress(state, stage, notice)
     return text
@@ -241,25 +249,7 @@ def _generate_query_batches(topic: str, search_plan: dict[str, Any], state: dict
 def _brief_note_from_paper(topic: str, paper: dict[str, Any], state: dict[str, Any] | None = None) -> dict[str, Any]:
     if state is not None:
         emit_progress(state, "notes", f"提炼候选论文摘要笔记：{paper.get('title', 'unknown')}")
-    prompt = get_paper_note_prompt(topic, paper)
-    raw = _call_llm_with_progress(state, "notes", prompt, system=NOTE_SYSTEM, json_object=True)
-    parsed = parse_json_object(raw)
-    return {
-        "title": paper.get("title", ""),
-        "arxiv_id": str(paper.get("arxiv_id", "") or ""),
-        "published": paper.get("published", ""),
-        "authors": paper.get("authors", []),
-        "entry_url": paper.get("entry_url", ""),
-        "pdf_url": paper.get("pdf_url", ""),
-        "query": paper.get("query", ""),
-        "query_label": paper.get("query_label", ""),
-        "problem": parsed.get("problem", ""),
-        "related_work": parsed.get("related_work", ""),
-        "method": parsed.get("method", ""),
-        "experiments": parsed.get("experiments", ""),
-        "summary": parsed.get("summary", paper.get("summary", "")),
-        "selection_status": "candidate",
-    }
+    return research_service.brief_note(topic, paper, lambda prompt, **kw: _call_llm_with_progress(state, "notes", prompt, **kw))
 
 
 # --- planner ---------------------------------------------------------------
@@ -286,17 +276,9 @@ def planner_agent(state: dict[str, Any]) -> dict[str, Any]:
     if state["long_term_memories"]:
         emit_progress(state, "planner", f"召回 {len(state['long_term_memories'])} 条相关长期记忆")
 
-    skills = load_all_skills(str(settings["skills_dir"]))
-    selected_skill = select_skill(query, skills)
-    if selected_skill:
-        emit_progress(state, "planner", f"命中技能：{selected_skill.get('name', 'unknown')}")
-    else:
-        emit_progress(state, "planner", "未命中任何技能，按通用流程处理")
-
-    # skill 的 output_style 作为默认输出风格；用户已保存的偏好优先级更高
-    skill_preferences = get_skill_output_preferences(selected_skill)
-    if skill_preferences:
-        user_profile = {**skill_preferences, **user_profile}
+    template = get_report_template(state["intent_mode"])
+    user_profile = {**user_profile, **output_preferences_for_query(query)}
+    emit_progress(state, "planner", f"使用写作模板：{template['name']}")
 
     state.setdefault("initial_user_question", state.get("initial_user_question") or query)
     state["research_rounds"] = 0
@@ -306,7 +288,7 @@ def planner_agent(state: dict[str, Any]) -> dict[str, Any]:
     planner_prompt = get_planner_prompt(
         query,
         user_profile,
-        selected_skill,
+        template,
         state.get("mode", "report"),
         initial_question=state.get("initial_user_question", ""),
         middle_summary=state.get("conversation_summary_middle", ""),
@@ -328,7 +310,7 @@ def planner_agent(state: dict[str, Any]) -> dict[str, Any]:
         state["session_mode"] = "topic_discovery"
 
     state["user_profile"] = user_profile
-    state["selected_skill"] = selected_skill
+    state["report_template"] = template
     attach_memory_summary(state)
     return state
 
@@ -350,6 +332,7 @@ def _build_tool_context(state: dict[str, Any], rewritten_query: str) -> ToolCont
         rebuild=bool(retrieval_scope.get("rebuild", False)),
         progress=lambda message: emit_progress(state, "tool", message),
         papers=list(state.get("paper_candidates", [])),
+        cancel_event=state.get("cancel_event"),
     )
 
 
@@ -420,6 +403,10 @@ def evidence_agent(state: dict[str, Any]) -> dict[str, Any]:
     state["tool_trace"] = list(state.get("tool_trace", [])) + trace
     state["tool_loop_degraded"] = bool(loop_result.get("degraded"))
 
+    if loop_result.get("cancelled"):
+        state["cancelled"] = True
+        return state
+
     if state.get("intent_mode") == "topic_research":
         state = _finalize_topic_evidence(state, context, loop_result, rewritten_query, top_k, rebuild, trace)
     else:
@@ -439,6 +426,10 @@ def _finalize_topic_evidence(
     rebuild: bool,
     trace: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    if loop_result.get("cancelled"):
+        state["cancelled"] = True
+        return state
+
     retrieval_scope = dict(state.get("retrieval_scope", {}))
     working_document = dict(state.get("working_document") or {})
     working_document.setdefault("topic", state.get("topic", ""))
@@ -543,42 +534,6 @@ def _finalize_paper_qa_evidence(
 # --- researcher ------------------------------------------------------------
 
 
-def _normalize_arxiv_id(value: str) -> str:
-    return _ARXIV_ID_CLEAN_PATTERN.sub("", str(value or "")).lower()
-
-
-def _docs_for_paper(paper: dict[str, Any], docs: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
-    """把证据块归属到具体论文：优先按 arxiv_id 匹配 chunk metadata，逐级回退。"""
-    arxiv_id = str(paper.get("arxiv_id", "") or "")
-    normalized_id = _normalize_arxiv_id(arxiv_id)
-
-    if normalized_id:
-        matched = [doc for doc in docs if _normalize_arxiv_id(doc.get("metadata", {}).get("arxiv_id", "")) == normalized_id]
-        if matched:
-            return matched, "arxiv_id"
-
-        matched = [
-            doc
-            for doc in docs
-            if normalized_id and normalized_id in _normalize_arxiv_id(doc.get("metadata", {}).get("source_name", ""))
-        ]
-        if matched:
-            return matched, "source_name_prefix"
-
-    title = str(paper.get("title", "") or "").strip()
-    if title:
-        matched = [
-            doc
-            for doc in docs
-            if title in str(doc.get("metadata", {}).get("paper_title", ""))
-            or title in str(doc.get("metadata", {}).get("source_name", ""))
-        ]
-        if matched:
-            return matched, "title"
-
-    return docs[:2], "fallback"
-
-
 def _fulltext_evidence_for_paper(
     state: dict[str, Any],
     paper: dict[str, Any],
@@ -607,20 +562,6 @@ def _fulltext_evidence_for_paper(
     return paper_docs, source
 
 
-def _format_fulltext_note(parsed: dict[str, Any], raw: str) -> str:
-    """把结构化笔记字段拼成可读文本（而不是直接拼 JSON 源码）。"""
-    field_labels = [
-        ("problem", "研究问题"),
-        ("method", "方法"),
-        ("experiments", "实验与结果"),
-        ("strengths", "优势"),
-        ("limitations", "局限"),
-        ("summary", "总体结论"),
-    ]
-    lines = [f"{label}：{str(parsed[key]).strip()}" for key, label in field_labels if str(parsed.get(key, "")).strip()]
-    return "\n".join(lines) if lines else raw.strip()
-
-
 def research_agent(state: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     query = _get_query(state)
@@ -644,25 +585,11 @@ def research_agent(state: dict[str, Any]) -> dict[str, Any]:
                 emit_progress(state, "research", f"未找到属于《{paper.get('title', 'unknown')}》的专属证据，暂用通用片段兜底")
             paper_docs = register_evidence(evidence_pool, paper_docs[:3])
 
-            evidence_text = format_retrieved_docs(paper_docs)
-            prompt = get_fulltext_note_prompt(state.get("topic", ""), paper, evidence_text)
-            raw = _call_llm_with_progress(state, "research", prompt, system=NOTE_SYSTEM, json_object=True)
-            parsed = parse_json_object(raw)
-
-            note = {
-                "title": paper.get("title", ""),
-                "arxiv_id": str(paper.get("arxiv_id", "") or ""),
-                "problem": parsed.get("problem", ""),
-                "method": parsed.get("method", ""),
-                "experiments": parsed.get("experiments", ""),
-                "strengths": parsed.get("strengths", ""),
-                "limitations": parsed.get("limitations", ""),
-                "summary": _format_fulltext_note(parsed, raw),
-                "evidence_status": source,
-                "evidence_count": len(paper_docs),
-                "citation_ids": [item.get("metadata", {}).get("citation_id", "") for item in paper_docs],
-                "selection_status": "selected",
-            }
+            note = research_service.fulltext_note(
+                state.get("topic", ""), paper, paper_docs,
+                lambda prompt, **kw: _call_llm_with_progress(state, "research", prompt, **kw),
+            )
+            note.update(evidence_status=source, evidence_count=len(paper_docs))
             fulltext_notes.append(note)
             evidence_status.append(
                 {
@@ -699,7 +626,7 @@ def research_agent(state: dict[str, Any]) -> dict[str, Any]:
         prompt = get_research_prompt(
             query,
             docs_text,
-            get_skill_steps(state.get("selected_skill", {})) if isinstance(state.get("selected_skill"), dict) else [],
+            state.get("report_template", {}).get("guidelines", []),
             state.get("mode", "report"),
             state.get("initial_user_question", ""),
             state.get("conversation_summary_middle", ""),
@@ -720,72 +647,28 @@ def research_agent(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def reflect_evidence(state: dict[str, Any]) -> dict[str, Any]:
-    """审查证据充分性，决定回边补证还是进入撰写。evidence_gaps 非空且未达轮次上限时回 evidence_agent。"""
-    settings = get_settings()
-    max_rounds = int(settings.get("max_research_rounds") or 2)
+    max_rounds = int(get_settings().get("max_research_rounds") or 2)
     round_index = int(state.get("research_rounds", 1))
-
-    if round_index >= max_rounds:
-        emit_progress(state, "reflect", f"已达到最大取证轮数 {max_rounds}，进入报告撰写")
-        state["evidence_gaps"] = []
-        state["reflection"] = {"sufficient": True, "reason": f"已达最大取证轮数 {max_rounds}", "evidence_gaps": []}
-        return state
-
-    prompt = get_reflection_prompt(
-        _get_query(state),
-        state.get("intent_mode", "topic_research"),
-        state.get("open_questions", []),
-        state.get("research_notes", ""),
-        state.get("citations", []),
-        state.get("evidence_status", []),
-        round_index,
-        max_rounds,
-    )
     emit_progress(state, "reflect", "正在审查证据是否足够支撑结论")
-    parsed = parse_json_object(_call_llm_with_progress(state, "reflect", prompt, system=REFLECT_SYSTEM, json_object=True))
-
-    if not parsed:
-        # 解析失败时用确定性规则兜底：只要有论文的证据是 fallback 就补一轮
-        fallback_gaps = [
-            f"《{item.get('title', 'unknown')}》缺少属于自己的证据片段"
-            for item in state.get("evidence_status", [])
-            if item.get("evidence_status") == "fallback"
-        ]
-        parsed = {
-            "sufficient": not fallback_gaps,
-            "evidence_gaps": fallback_gaps,
-            "open_questions": state.get("open_questions", []),
-            "next_queries": [],
-            "reason": "反思结果解析失败，按证据归属情况判定",
-        }
-
-    sufficient = bool(parsed.get("sufficient", True))
-    gaps = [str(item).strip() for item in parsed.get("evidence_gaps", []) if str(item).strip()]
-    if sufficient:
-        gaps = []
-
-    state["evidence_gaps"] = gaps
-    state["open_questions"] = [str(item).strip() for item in parsed.get("open_questions", state.get("open_questions", [])) if str(item).strip()]
-    next_queries = [str(item).strip() for item in parsed.get("next_queries", []) if str(item).strip()]
-    reflection = {
-        "round": round_index,
-        "sufficient": sufficient and not gaps,
-        "evidence_gaps": gaps,
-        "open_questions": state["open_questions"],
-        "next_queries": next_queries,
-        "reason": str(parsed.get("reason", "")),
-    }
+    reflection = research_service.review_evidence(
+        _get_query(state), state.get("intent_mode", "topic_research"), state.get("research_notes", ""),
+        state.get("citations", []), state.get("evidence_status", []), state.get("open_questions", []),
+        round_index, max_rounds,
+        lambda prompt, **kw: _call_llm_with_progress(state, "reflect", prompt, **kw),
+    )
     state["reflection"] = reflection
+    state["evidence_gaps"] = reflection["evidence_gaps"]
+    state["open_questions"] = reflection["open_questions"]
     state["working_document"] = add_reflection(dict(state.get("working_document") or {}), reflection)
-
     if reflection["sufficient"]:
-        emit_progress(state, "reflect", f"证据充分，进入报告撰写（{reflection['reason'] or '无补充说明'}）")
+        emit_progress(state, "reflect", "证据充分，进入报告撰写")
+    elif reflection["stop_reason"] == "round_limit":
+        emit_progress(state, "reflect", "已达研究轮数上限，报告保留未解决的证据缺口")
     else:
-        emit_progress(state, "reflect", f"证据不足，准备补充取证：{gaps}")
-        if next_queries:
-            state["query_batches"] = [{"label": f"gap_{index}", "query": query} for index, query in enumerate(next_queries, 1)]
-            emit_progress(state, "reflect", f"下一轮检索词：{next_queries}")
-
+        emit_progress(state, "reflect", f"证据不足，准备补充取证：{reflection['evidence_gaps']}")
+        if reflection["next_queries"]:
+            state["query_batches"] = [{"label": f"gap_{index}", "query": query}
+                                      for index, query in enumerate(reflection["next_queries"], 1)]
     attach_memory_summary(state)
     return state
 
@@ -829,41 +712,16 @@ def _resolve_outline(state: dict[str, Any]) -> list[str]:
 
 
 def _write_survey_sections(state: dict[str, Any], outline: list[str], notes: str) -> list[dict[str, str]]:
-    """逐节撰写综述。
-
-    get_survey_section_prompt 此前是死代码 —— 功能设计了、prompt 写了，
-    但从没接到 writer 上，导致大纲被硬编码、报告是单次生成。
-    """
-    working_document = dict(state.get("working_document") or {})
-    docs = state.get("retrieved_docs", [])
-    evidence_text = format_retrieved_docs(docs[:8])
-    sections: list[dict[str, str]] = []
-
-    for index, title in enumerate(outline, 1):
-        emit_progress(state, "report", f"正在撰写第 {index}/{len(outline)} 节：{title}")
-        body = _call_llm_with_progress(
-            state,
-            "report",
-            get_survey_section_prompt(
-                state.get("topic", ""),
-                title,
-                f"{notes}\n\n检索证据：\n{evidence_text}",
-                working_document,
-            ),
-            system=SURVEY_SECTION_SYSTEM,
-        ).strip()
-        if not body:
-            emit_progress(state, "report", f"第 {index} 节生成为空，跳过")
-            continue
-        sections.append({"title": title, "body": body})
-    return sections
+    return research_service.write_sections(
+        state.get("topic", ""), outline, notes, state.get("retrieved_docs", []),
+        {**dict(state.get("working_document") or {}), "user_profile": state.get("user_profile", {})},
+        lambda prompt, **kw: _call_llm_with_progress(state, "report", prompt, **kw),
+        lambda index, title: emit_progress(state, "report", f"正在撰写第 {index}/{len(outline)} 节：{title}"),
+    )
 
 
 def _compose_survey(topic: str, sections: list[dict[str, str]]) -> str:
-    parts = [f"# {topic} 调研报告" if topic else "# 调研报告"]
-    for section in sections:
-        parts.append(f"\n## {section['title']}\n\n{section['body'].strip()}")
-    return "\n".join(parts).strip()
+    return research_service.compose_report(topic, sections)
 
 
 def _persist_report(state: dict[str, Any], report: str) -> str:
@@ -871,7 +729,7 @@ def _persist_report(state: dict[str, Any], report: str) -> str:
     explicit = str(state.get("output_path") or "").strip()
     if not report.strip():
         return ""
-    # 论文问答是逐轮对话，只有显式 --output 时才落盘；调研报告默认落盘
+    # 问答由调用方提供输出路径（Web 为每个任务分配路径）；调研报告默认落盘。
     if not explicit and state.get("intent_mode") != "topic_research":
         return ""
 
@@ -985,6 +843,11 @@ def report_writer(state: dict[str, Any]) -> dict[str, Any]:
 
     state["report_path"] = _persist_report(state, state.get("final_answer", ""))
 
+    # Completed reports are the durable input to the fresh-context discussion
+    # flow.  This is persisted with the normal checkpoint below.
+    if state.get("intent_mode") == "topic_research":
+        persist_research_context(state)
+
     save_session_artifact(
         state.get("session_id", state.get("user_id", "default")),
         SURVEY_ARTIFACT_TYPE,
@@ -1006,12 +869,7 @@ def report_writer(state: dict[str, Any]) -> dict[str, Any]:
 
 def update_memory_node(state: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
-    task = state.get("task", "")
-    report = state.get("final_answer") or state.get("final_report", "")
-
-    preferences = infer_preferences(task, report, state.get("user_profile", {}), invoke_llm=_call_llm)
-    merged_preferences = merge_preferences(state.get("user_profile", {}), preferences)
-    state["user_profile"] = merged_preferences
+    # 仅保存研究产物；偏好由用户设置，长期笔记由用户主动保存。
 
     if state.get("intent_mode") == "topic_research" and state.get("selected_papers"):
         notes_by_id = {str(note.get("arxiv_id", "")): note for note in state.get("paper_notes", [])}
@@ -1033,32 +891,7 @@ def update_memory_node(state: dict[str, Any]) -> dict[str, Any]:
                 str(settings["sqlite_db_path"]),
             )
 
-    notes_payload = []
-    if state.get("selected_papers"):
-        notes_payload.extend(
-            [
-                {"memory_type": "interest", "content": f"研究主题 {state.get('topic', '')} 中关注 {paper.get('title', '')}"}
-                for paper in state["selected_papers"][:3]
-            ]
-        )
-    if report:
-        notes_payload.append({"memory_type": "summary", "content": report[:240]})
-    if not notes_payload:
-        notes_payload.append({"memory_type": "summary", "content": task[:240]})
-
-    prompt = get_memory_selection_prompt(
-        state.get("topic") or state.get("initial_user_question", ""),
-        notes_payload,
-        report,
-        state.get("user_profile", {}),
-    )
-    emit_progress(state, "memory", "正在准备可选长期记忆候选")
-    candidates = parse_json_dicts(_call_llm_with_progress(state, "memory", prompt, system=MEMORY_SYSTEM))
-    if not candidates:
-        candidates = notes_payload[:3]
-
-    state["pending_memory_candidates"] = candidates
-    state["awaiting_memory_confirmation"] = True
-    emit_progress(state, "memory", f"已生成 {len(candidates)} 条长期记忆候选")
+    state.setdefault("pending_memory_candidates", [])  # 兼容旧会话中尚未确认的候选
+    state["awaiting_memory_confirmation"] = False
     attach_memory_summary(state)
     return state

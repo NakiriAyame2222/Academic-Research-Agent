@@ -1,15 +1,19 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   cancelJob,
+  cancelTopic,
   createSession,
   getConversation,
+  getCurrentResearch,
+  resumeResearch,
+  sendResearchCommand,
   submitResearch,
   type ConversationTurn,
+  type RetrievalOptions,
+  type SelectedFile,
 } from "./api/client";
-import { useHealth } from "./api/useHealth";
-import { HealthBar } from "./components/HealthBar";
-import { MemoryConfirm } from "./components/MemoryConfirm";
+import { NoteEditor } from "./components/NoteEditor";
 import { QueryBar } from "./components/QueryBar";
 import { SessionBar } from "./components/SessionBar";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -24,19 +28,41 @@ export default function App() {
   const [activeQuery, setActiveQuery] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
-  const [uploadedFile, setUploadedFile] = useState<{ path: string; name: string } | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+  const [retrievalOptions, setRetrievalOptions] = useState<RetrievalOptions>({ rebuild_index: false });
+  const [loadingSession, setLoadingSession] = useState(false);
+  const sessionLoadVersion = useRef(0);
   const [focusResult, setFocusResult] = useState<import("./types").ResearchResult | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
-  const [showMemory, setShowMemory] = useState(false);
+  const [showNote, setShowNote] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsVersion, setSettingsVersion] = useState(0);
+  const [interruptedState, setInterruptedState] = useState<{ canResume: boolean; topicsCount: number } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // settings 变更后重新拉 health（LLM 连接状态可能已改变）
-  const health = useHealth(settingsVersion);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("academic_agent_last_session_id");
+      if (saved) {
+        handleSelectSession({
+          session_id: saved,
+          topic: "",
+          has_report: false,
+          updated_at: "",
+          messages_count: 0,
+        });
+      }
+    } catch {}
+  }, []);
 
   async function handleSubmit(query: string, filePath: string | null) {
+    if (retrievalOptions.top_k !== undefined &&
+        (!Number.isInteger(retrievalOptions.top_k) || retrievalOptions.top_k < 1 || retrievalOptions.top_k > 20)) {
+      setSubmitError("检索数量应为 1 到 20 的整数。");
+      return;
+    }
     setSubmitError("");
+    setLoadError("");
     setSubmitting(true);
     try {
       let sid = sessionId;
@@ -44,16 +70,60 @@ export default function App() {
         sid = (await createSession()).session_id;
         setSessionId(sid);
       }
+      try {
+        localStorage.setItem("academic_agent_last_session_id", sid);
+      } catch {}
       const { job_id } = await submitResearch(sid, {
         query,
         file_path: filePath ?? undefined,
+        top_k: retrievalOptions.top_k,
+        rebuild_index: !!filePath && retrievalOptions.rebuild_index,
         // 会话里已有完成的轮 → 多轮续跑（agent 侧 resume=True 读 checkpoint）
         resume: turns.length > 0,
       });
       setActiveQuery(query);
+      setRetrievalOptions((prev) => ({ ...prev, rebuild_index: false }));
       setActiveJobId(job_id);
-      setShowMemory(false);
+      setInterruptedState(null);
+      setShowNote(false);
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+    } catch (err) {
+      setSubmitError(String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleSendCommand(commandText: string) {
+    if (!sessionId) return;
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      const resp = await sendResearchCommand(sessionId, { raw_text: commandText });
+      if (resp.status === "rejected") {
+        setSubmitError(resp.message || "指令被拒绝");
+      }
+    } catch (err) {
+      setSubmitError(String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleResume() {
+    if (!sessionId) return;
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      const resp = await resumeResearch(sessionId);
+      if (resp.job_id) {
+        setActiveJobId(resp.job_id);
+        setActiveQuery("继续中断的调研");
+        setInterruptedState(null);
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+      } else {
+        setSubmitError(resp.message || "恢复失败");
+      }
     } catch (err) {
       setSubmitError(String(err));
     } finally {
@@ -68,57 +138,116 @@ export default function App() {
     setFocusResult(turn.result);
   }
 
+  function handleSessionDeleted(deletedSessionId: string) {
+    if (deletedSessionId === sessionId) {
+      sessionLoadVersion.current += 1;
+      setLoadingSession(false);
+      setSessionId(null);
+      setTurns([]);
+      setFocusResult(null);
+      setActiveJobId(null);
+      setInterruptedState(null);
+      setLoadError("");
+      setSelectedFile(null);
+      setRetrievalOptions({ rebuild_index: false });
+    }
+    try {
+      if (localStorage.getItem("academic_agent_last_session_id") === deletedSessionId) {
+        localStorage.removeItem("academic_agent_last_session_id");
+      }
+    } catch {}
+  }
+
   async function handleSelectSession(session: SessionSummary) {
+    const version = ++sessionLoadVersion.current;
+    setSelectedFile(null);
+    setRetrievalOptions({ rebuild_index: false });
+    setSubmitError("");
     setActiveJobId(null);
-    setShowMemory(false);
+    setShowNote(false);
+    setLoadError("");
+    setInterruptedState(null);
+    setTurns([]);
+    setFocusResult(null);
     if (!session.session_id) {
+      setLoadingSession(false);
       // "新会话"
       setSessionId(null);
       setTurns([]);
       setFocusResult(null);
+      try {
+        localStorage.removeItem("academic_agent_last_session_id");
+      } catch {}
       return;
     }
     setSessionId(session.session_id);
+    setLoadingSession(true);
+    try {
+      localStorage.setItem("academic_agent_last_session_id", session.session_id);
+    } catch {}
     try {
       const data = await getConversation(session.session_id);
+      if (version !== sessionLoadVersion.current) return;
       setTurns(data.turns);
+      setSelectedFile(data.selected_file);
       setFocusResult(data.turns.length ? data.turns[data.turns.length - 1].result : null);
-    } catch {
+    } catch (err) {
+      if (version !== sessionLoadVersion.current) return;
       setTurns([]);
       setFocusResult(null);
+      setLoadError(`加载会话失败：${String(err)}`);
+    }
+
+    try {
+      const cur = await getCurrentResearch(session.session_id);
+      if (version !== sessionLoadVersion.current) return;
+      if (cur.is_active && cur.job_id) {
+        setActiveJobId(cur.job_id);
+        setActiveQuery("进行中的调研");
+      } else if (cur.can_resume) {
+        setInterruptedState({
+          canResume: true,
+          topicsCount: cur.topics.length,
+        });
+      }
+    } catch {
+      // ignore
+    } finally {
+      if (version === sessionLoadVersion.current) setLoadingSession(false);
     }
   }
 
-  function handleCitationClick(citationId: string) {
+  const handleCitationClick = useCallback((citationId: string) => {
     setHighlightId(citationId);
-    document.getElementById(`citation-${citationId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
     window.setTimeout(() => setHighlightId(null), 2000);
-  }
+  }, []);
 
-  const running = submitting || activeJobId !== null;
+  const running = submitting || loadingSession || activeJobId !== null;
   const lastResult = focusResult ?? turns[turns.length - 1]?.result ?? null;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800">
-      <header className="border-b bg-white px-6 py-3">
+    <div className="min-h-screen bg-paper font-sans text-ink">
+      <header className="border-b border-rule bg-surface px-6 py-3.5">
         <div className="mb-2 flex items-center gap-3">
-          <h1 className="text-lg font-semibold">学术研究 Agent</h1>
-          <SessionBar currentSessionId={sessionId} onSelect={handleSelectSession} />
+          <h1 className="text-lg font-medium tracking-tight text-ink">学术研究 Agent</h1>
+          <SessionBar
+            currentSessionId={sessionId}
+            onSelect={handleSelectSession}
+            onDeleted={handleSessionDeleted}
+          />
           <button
             onClick={() => setShowSettings(true)}
-            className="rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
-            title="模型与 API 配置"
+            className="rounded-md border border-rule px-2.5 py-1 text-xs text-ink-muted transition hover:bg-paper hover:text-ink"
+            title="模型、输出偏好与运行参数"
           >
-            ⚙ 模型配置
+            ⚙ 研究设置
           </button>
         </div>
-        <HealthBar health={health} />
       </header>
 
       {showSettings && (
         <SettingsDialog
           onClose={() => setShowSettings(false)}
-          onSaved={() => setSettingsVersion((v) => v + 1)}
         />
       )}
 
@@ -141,48 +270,152 @@ export default function App() {
             <TurnBlock
               jobId={activeJobId}
               query={activeQuery}
+              isFollowUp={turns.length > 0}
               onComplete={handleTurnComplete}
               onCitationClick={handleCitationClick}
-              onCancel={() => cancelJob(activeJobId).catch(() => undefined)}
+              onCancel={() => {
+                cancelJob(activeJobId).catch(() => undefined);
+                setActiveJobId(null);
+              }}
+              onCancelTopic={(topicId) => {
+                if (sessionId) {
+                  cancelTopic(sessionId, topicId)
+                    .then((resp) => {
+                      if (resp && resp.status === "rejected") {
+                        setSubmitError(resp.message || "取消主题请求被拒绝");
+                      }
+                    })
+                    .catch((err) => setSubmitError(String(err)));
+                }
+              }}
+              onTerminal={(status, error) => {
+                setTurns((prev) => [
+                  ...prev,
+                  {
+                    index: prev.length,
+                    query: activeQuery,
+                    timestamp: new Date().toISOString(),
+                    result: {
+                      session_id: sessionId || "",
+                      intent_mode: "topic_research",
+                      final_answer: `> **任务已${status === "cancelled" ? "取消" : "失败"}**\n\n${error || "调研流程终止"}`,
+                      survey_artifact: {},
+                      citations: [],
+                      citation_audit: null,
+                      tool_trace: [],
+                      tool_loop_degraded: false,
+                      evidence_status: [],
+                      evidence_gaps: [],
+                      open_questions: [],
+                      research_rounds: 0,
+                      selected_papers: [],
+                      paper_notes: [],
+                      pending_memory_candidates: [],
+                      report_download_url: null,
+                    },
+                  },
+                ]);
+                setActiveJobId(null);
+                if (error) setSubmitError(error);
+              }}
             />
           )}
 
-          {turns.length === 0 && !activeJobId && (
-            <p className="pt-8 text-center text-sm text-slate-400">
-              提交一个调研主题或论文问题开始对话
-            </p>
+          {turns.length === 0 && !activeJobId && !loadError && (
+            <div className="py-14 text-center">
+              <h2 className="font-serif text-2xl font-normal tracking-tight text-ink sm:text-3xl">
+                想调研什么？
+              </h2>
+              <p className="mt-2.5 text-xs text-ink-muted sm:text-sm">
+                输入研究课题、上传论文深入研读，或直接点击下方示例开始
+              </p>
+              <div className="mt-6 flex flex-wrap justify-center gap-2">
+                {[
+                  "综述 latent variable reasoning 的最新进展",
+                  "RLHF 与 DPO 的取舍",
+                  "扩散模型在蛋白质结构预测的应用",
+                ].map((example) => (
+                  <button
+                    key={example}
+                    type="button"
+                    disabled={running}
+                    onClick={() => handleSubmit(example, selectedFile?.path ?? null)}
+                    className="rounded-full border border-rule bg-surface px-3.5 py-1.5 text-xs text-ink-muted transition hover:border-accent hover:bg-accent-soft hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {example}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
 
-          {submitError && <p className="text-sm text-red-600">提交失败：{submitError}</p>}
+          {loadError && <p className="text-sm font-medium text-danger">{loadError}</p>}
+          {submitError && <p className="text-sm font-medium text-danger">{submitError}</p>}
 
           <div ref={bottomRef} />
 
-          <div className="sticky bottom-4 rounded-lg border bg-white/95 p-3 shadow-md backdrop-blur">
+          {interruptedState?.canResume && !activeJobId && (
+            <div className="flex items-center justify-between rounded-xl border border-yellow-300 bg-yellow-50 p-3.5 text-xs text-yellow-900 shadow-sm">
+              <div>
+                <span className="font-semibold">检测到上次未完成的调研任务（已中断）：</span>
+                <span className="ml-1 text-yellow-800">
+                  包含 {interruptedState.topicsCount} 个子主题，保留已完成成果，可继续未完成的主题。
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={handleResume}
+                className="rounded-md bg-yellow-600 px-3 py-1.5 font-medium text-white transition hover:bg-yellow-700 disabled:opacity-50"
+              >
+                {submitting ? "正在恢复…" : "继续执行 (Resume)"}
+              </button>
+            </div>
+          )}
+
+          <div className="sticky bottom-4 rounded-xl border border-rule bg-surface/95 p-3.5 shadow-sm backdrop-blur">
             <QueryBar
-              onSubmit={handleSubmit}
-              disabled={running}
-              uploadedFile={uploadedFile}
-              onUploaded={setUploadedFile}
+              key={sessionId || "new"}
+              onSubmit={(q, fp) => {
+                if (activeJobId) {
+                  handleSendCommand(q);
+                } else {
+                  handleSubmit(q, fp);
+                }
+              }}
+              submitting={submitting}
+              disabled={loadingSession}
+              selectedFile={selectedFile}
+              onFileSelected={(file) => {
+                setSelectedFile(file);
+                setRetrievalOptions((prev) => ({ ...prev, rebuild_index: false }));
+              }}
+              retrievalOptions={retrievalOptions}
+              onRetrievalOptionsChange={setRetrievalOptions}
+              commandMode={activeJobId !== null}
+              placeholder={
+                activeJobId
+                  ? "输入动态指令，例如：增加调研主题 d 或 取消调研主题 b"
+                  : undefined
+              }
+              buttonText={activeJobId ? "发送指令" : undefined}
             />
           </div>
 
-          {lastResult && lastResult.pending_memory_candidates.length > 0 && (
+          {lastResult?.final_answer && !activeJobId && (
             <button
-              onClick={() => setShowMemory((prev) => !prev)}
-              className="rounded-md border border-pink-300 bg-pink-50 px-3 py-1.5 text-xs text-pink-700"
+              onClick={() => setShowNote((prev) => !prev)}
+              className="rounded-md border border-rule bg-surface px-3 py-1.5 text-xs text-ink-muted transition hover:bg-paper hover:text-ink"
             >
-              {showMemory ? "收起" : `待确认记忆 ${lastResult.pending_memory_candidates.length} 条`}
+              {showNote ? "收起笔记编辑" : "保存研究笔记"}
             </button>
           )}
-          {showMemory && sessionId && (
-            <MemoryConfirm
+          {showNote && sessionId && !activeJobId && (
+            <NoteEditor
+              key={sessionId}
               sessionId={sessionId}
-              onDone={() => {
-                setShowMemory(false);
-                setFocusResult((prev) =>
-                  prev ? { ...prev, pending_memory_candidates: [] } : prev,
-                );
-              }}
+              report={lastResult?.final_answer || ""}
+              onDone={() => setShowNote(false)}
             />
           )}
         </div>

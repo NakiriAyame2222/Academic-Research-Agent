@@ -19,7 +19,7 @@ class ResearchState(TypedDict):
     retrieved_docs: list[dict[str, Any]]
     research_notes: str
     user_profile: dict[str, Any]
-    selected_skill: dict[str, Any]
+    report_template: dict[str, Any]
     final_report: str
     final_answer: str
     final_synthesis: str
@@ -49,6 +49,11 @@ class ResearchState(TypedDict):
     resume_from_checkpoint: bool
     exit_requested: bool
     awaiting_memory_confirmation: bool
+    research_context: dict[str, Any]
+    discussion_intent: str
+    discussion_history: list[dict[str, Any]]
+    discussion_scope: str
+    discussion_sources: list[str]
 
 
 
@@ -90,7 +95,7 @@ def build_initial_state(
         "retrieved_docs": [],
         "research_notes": "",
         "user_profile": {"user_id": user_id},
-        "selected_skill": {},
+        "report_template": {},
         "final_report": "",
         "final_answer": "",
         "final_synthesis": "",
@@ -120,4 +125,9 @@ def build_initial_state(
         "resume_from_checkpoint": False,
         "exit_requested": False,
         "awaiting_memory_confirmation": False,
+        "research_context": {},
+        "discussion_intent": "",
+        "discussion_history": [],
+        "discussion_scope": "",
+        "discussion_sources": [],
     }

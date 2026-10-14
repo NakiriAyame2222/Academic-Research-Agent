@@ -1,12 +1,3 @@
-"""可被 LLM 自主调用的工具注册表。
-
-改动前 tools/ 下三个模块只是普通 Python 函数，由 agent/nodes.py 在固定位置
-硬编码调用（`if intent_mode == "topic_research": ... else: ...`），LLM 无权决定
-"这次不用搜 arXiv"或"证据不够再搜一轮"。
-
-这里把它们包装成带 JSON Schema 的工具声明，交给 OpenAI 兼容的 tools 参数，
-真正让模型决定调用哪个、调几轮、什么时候停。
-"""
 from __future__ import annotations
 
 import json
@@ -28,6 +19,7 @@ class ToolContext:
     """工具执行期间的共享上下文，工具产出会累积在这里供节点读取。"""
 
     session_id: str = "default"
+    topic_id: str | None = None
     topic: str = ""
     query: str = ""
     top_k: int = 4
@@ -36,6 +28,7 @@ class ToolContext:
     fulltext_persist_dir: str | None = None
     rebuild: bool = False
     progress: Callable[[str], None] | None = None
+    cancel_event: Any | None = None
     papers: list[dict[str, Any]] = field(default_factory=list)
     surveys: list[dict[str, Any]] = field(default_factory=list)
     search_runs: list[dict[str, Any]] = field(default_factory=list)
@@ -92,13 +85,15 @@ def _trim_doc(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def _handle_search_arxiv(context: ToolContext, arguments: dict[str, Any]) -> Any:
+    if context.cancel_event and getattr(context.cancel_event, "is_set", lambda: False)():
+        return {"error": "操作已取消"}
     query = str(arguments.get("query") or context.topic or context.query).strip()
     if not query:
         return {"error": "query 不能为空"}
     max_results = max(1, min(int(arguments.get("max_results") or context.top_k or 5), 10))
     label = str(arguments.get("label") or "agent")
 
-    results = search_arxiv(query, max_results=max_results, progress_callback=context.progress)
+    results = search_arxiv(query, max_results=max_results, progress_callback=context.progress, cancel_event=context.cancel_event)
     for paper in results:
         paper.setdefault("query", query)
         paper["query_label"] = label
@@ -108,16 +103,20 @@ def _handle_search_arxiv(context: ToolContext, arguments: dict[str, Any]) -> Any
 
 
 def _handle_search_surveys(context: ToolContext, arguments: dict[str, Any]) -> Any:
+    if context.cancel_event and getattr(context.cancel_event, "is_set", lambda: False)():
+        return {"error": "操作已取消"}
     topic = str(arguments.get("topic") or context.topic or context.query).strip()
     if not topic:
         return {"error": "topic 不能为空"}
     max_results = max(1, min(int(arguments.get("max_results") or 3), 10))
-    results = search_surveys(topic, max_results=max_results, progress_callback=context.progress)
+    results = search_surveys(topic, max_results=max_results, progress_callback=context.progress, cancel_event=context.cancel_event)
     context.surveys.extend(results)
     return {"topic": topic, "count": len(results), "surveys": [_trim_paper(paper) for paper in results]}
 
 
 def _handle_search_local(context: ToolContext, arguments: dict[str, Any]) -> Any:
+    if context.cancel_event and getattr(context.cancel_event, "is_set", lambda: False)():
+        return {"error": "操作已取消"}
     query = str(arguments.get("query") or context.query).strip()
     if not query:
         return {"error": "query 不能为空"}
@@ -134,6 +133,8 @@ def _handle_search_local(context: ToolContext, arguments: dict[str, Any]) -> Any
 
 
 def _handle_fetch_fulltext(context: ToolContext, arguments: dict[str, Any]) -> Any:
+    if context.cancel_event and getattr(context.cancel_event, "is_set", lambda: False)():
+        return {"error": "操作已取消"}
     requested = arguments.get("arxiv_ids") or []
     if isinstance(requested, str):
         requested = [item.strip() for item in requested.split(",") if item.strip()]
@@ -152,6 +153,9 @@ def _handle_fetch_fulltext(context: ToolContext, arguments: dict[str, Any]) -> A
         targets,
         rebuild=True,
         progress_callback=context.progress,
+        topic_id=context.topic_id,
+        cancel_event=context.cancel_event,
+        persist_dir=context.fulltext_persist_dir,
     )
     context.fulltext_persist_dir = persist_dir
     context.downloaded = downloaded
@@ -162,6 +166,8 @@ def _handle_fetch_fulltext(context: ToolContext, arguments: dict[str, Any]) -> A
 
 
 def _handle_retrieve_fulltext(context: ToolContext, arguments: dict[str, Any]) -> Any:
+    if context.cancel_event and getattr(context.cancel_event, "is_set", lambda: False)():
+        return {"error": "操作已取消"}
     if not context.fulltext_persist_dir:
         return {"error": "还没有全文索引，请先调用 fetch_paper_fulltext"}
     query = str(arguments.get("query") or context.query or context.topic).strip()
@@ -172,6 +178,8 @@ def _handle_retrieve_fulltext(context: ToolContext, arguments: dict[str, Any]) -
 
 
 def _handle_read_local_file(context: ToolContext, arguments: dict[str, Any]) -> Any:
+    if context.cancel_event and getattr(context.cancel_event, "is_set", lambda: False)():
+        return {"error": "操作已取消"}
     file_path = str(arguments.get("file_path") or context.file_path or "").strip()
     if not file_path:
         return {"error": "file_path 不能为空"}

@@ -1,13 +1,3 @@
-"""真正的 tool calling 循环（ReAct 风格）。
-
-与改动前的区别：
-- 改动前对话历史是被 _format_context_layers 拼成文本塞进唯一一条 user message，
-  工具由图的拓扑硬编码调用；
-- 现在 messages 数组真正累积（system / user / assistant.tool_calls / tool），
-  LLM 自己决定调哪个工具、调几轮、什么时候 finish。
-
-端点不支持 tools 或没有真实 LLM 时返回 degraded=True，由调用方回落到确定性流程。
-"""
 from __future__ import annotations
 
 import json
@@ -16,6 +6,7 @@ from typing import Any
 
 from agent.json_utils import parse_json_object
 from agent.llm import chat_with_tools, drain_degrade_notices, tool_calling_available
+from agent.llm import retry_progress
 from agent.progress import emit_progress
 from tools.registry import ToolContext, ToolSpec, dispatch, serialize_result, to_openai_tools
 
@@ -55,10 +46,23 @@ def run_tool_loop(
     ]
     trace: list[dict[str, Any]] = []
 
+    cancel_ev = getattr(context, "cancel_event", None)
+
     for step in range(1, max_steps + 1):
-        result = chat_with_tools(messages, tools=tools_payload)
+        if cancel_ev and getattr(cancel_ev, "is_set", lambda: False)():
+            return {"degraded": False, "cancelled": True, "steps": step - 1, "trace": trace, "finish_reason": "cancelled"}
+
+        with retry_progress(lambda message: emit_progress(state, "tool", message)):
+            try:
+                result = chat_with_tools(messages, tools=tools_payload, cancel_event=cancel_ev)
+            except TypeError:
+                # 兼容测试替身和第三方旧适配器仍使用旧签名的情况。
+                result = chat_with_tools(messages, tools=tools_payload)
         for notice in drain_degrade_notices():
             emit_progress(state, "tool", notice)
+
+        if cancel_ev and getattr(cancel_ev, "is_set", lambda: False)():
+            return {"degraded": False, "cancelled": True, "steps": step - 1, "trace": trace, "finish_reason": "cancelled"}
 
         if result.get("degraded"):
             if result.get("error"):
@@ -94,7 +98,21 @@ def run_tool_loop(
             }
         )
 
+        cancelled_during_calls = False
         for index, call in enumerate(tool_calls):
+            call_id = call.get("id") or f"call_{step}_{index}"
+            if cancel_ev and getattr(cancel_ev, "is_set", lambda: False)():
+                cancelled_during_calls = True
+                # 严格保证 LLM tool_call message pairing：取消也要配对
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": serialize_result({"error": "operation cancelled"}),
+                    }
+                )
+                continue
+
             name = call["name"]
             arguments = parse_json_object(call["arguments"] or "{}")
             emit_progress(state, "tool", f"第 {step} 步：调用 {name}({serialize_result(arguments)[:160]})")
@@ -117,10 +135,13 @@ def run_tool_loop(
             messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": call["id"] or f"call_{step}_{index}",
+                    "tool_call_id": call_id,
                     "content": serialize_result(tool_result),
                 }
             )
+
+        if cancelled_during_calls or (cancel_ev and getattr(cancel_ev, "is_set", lambda: False)()):
+            return {"degraded": False, "cancelled": True, "steps": step, "trace": trace, "finish_reason": "cancelled"}
 
         if context.finished:
             emit_progress(state, "tool", f"取证结束：{context.finish_reason}")

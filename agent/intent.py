@@ -1,12 +1,3 @@
-"""意图路由的唯一真源。
-
-改动前 app.py:detect_intent_mode 与 agent/nodes.py:_infer_intent_mode 各维护一份
-词表且已经不一致，且逻辑是"首次命中即决定" —— demo 里
-"搜索并总结现有的关于潜变量推理的研究,返回一个报告" 因为 topic 词表没有裸"研究"、
-先被 paper 词表的"总结"命中，被误判成 paper_qa，最终走了本地检索。
-
-现在改为加权打分：强信号优先，弱信号只在没有强信号时参与比较。
-"""
 from __future__ import annotations
 
 import re

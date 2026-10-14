@@ -1,12 +1,3 @@
-"""共享分词器。
-
-改动前 rag/retriever.py 用 re.compile(r"\\w+") 分词：汉字属于 \\w，
-所以"潜变量推理的研究"会被当成一整个词，中文场景下 TF-IDF 退化成"整句精确匹配"，
-那 30% 的稀疏权重几乎白给。
-
-现在：jieba 可用时中文走 jieba；不可用时对连续汉字串取字符 bigram，
-ASCII 部分始终保持词级切分（保证英文语料的检索指标不受影响）。
-"""
 from __future__ import annotations
 
 import re

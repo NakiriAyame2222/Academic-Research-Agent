@@ -1,4 +1,10 @@
-import type { JobView, PendingMemory, ResearchResult, SessionSummary } from "../types";
+import type {
+  CommandResponse,
+  CurrentResearchView,
+  JobView,
+  ResearchResult,
+  SessionSummary,
+} from "../types";
 
 async function postJson<T>(url: string, body?: unknown): Promise<T> {
   const resp = await fetch(url, {
@@ -39,15 +45,25 @@ export async function uploadPaper(file: File): Promise<{ file_path: string }> {
   return (await resp.json()) as { file_path: string };
 }
 
-export function listPendingMemories(sessionId: string): Promise<{ candidates: PendingMemory[] }> {
-  return getJson(`/api/sessions/${sessionId}/memories`);
+export interface SelectedFile {
+  path: string;
+  name: string;
 }
 
-export function saveMemories(
-  sessionId: string,
-  indexes: number[],
-): Promise<{ saved: number }> {
-  return postJson(`/api/sessions/${sessionId}/memories`, { indexes });
+export interface PaperInfo {
+  file_name: string;
+  file_path: string;
+  size_bytes: number;
+  suffix: string;
+}
+
+export function listPapers(): Promise<PaperInfo[]> {
+  return getJson("/api/papers");
+}
+
+export interface RetrievalOptions {
+  top_k?: number;
+  rebuild_index: boolean;
 }
 
 export async function cancelJob(jobId: string): Promise<void> {
@@ -64,7 +80,7 @@ export interface ConversationTurn {
 
 export function getConversation(
   sessionId: string,
-): Promise<{ session_id: string; turns: ConversationTurn[] }> {
+): Promise<{ session_id: string; turns: ConversationTurn[]; selected_file: SelectedFile | null }> {
   return getJson(`/api/sessions/${sessionId}/conversation`);
 }
 
@@ -87,6 +103,25 @@ export function updateSettings(settings: ModelSettings): Promise<ModelSettings> 
   return postJson("/api/settings", settings);
 }
 
+export interface OutputPreferences {
+  language: "Chinese" | "English";
+  format: "structured" | "table" | "markdown" | "bullet" | "narrative";
+  tone: "academic" | "concise" | "neutral" | "tutorial";
+  depth: "overview" | "standard" | "deep";
+}
+
+export function getOutputPreferences(): Promise<OutputPreferences> {
+  return getJson("/api/settings/preferences");
+}
+
+export function saveOutputPreferences(preferences: OutputPreferences): Promise<OutputPreferences> {
+  return postJson("/api/settings/preferences", preferences);
+}
+
+export function saveResearchNote(sessionId: string, content: string): Promise<{ saved: number }> {
+  return postJson(`/api/sessions/${sessionId}/notes`, { content });
+}
+
 export interface ResearchBody {
   query: string;
   file_path?: string;
@@ -106,4 +141,36 @@ export async function getJob(jobId: string): Promise<JobView> {
   const resp = await fetch(`/api/jobs/${jobId}`);
   if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
   return (await resp.json()) as JobView;
+}
+
+export interface ResearchCommandPayload {
+  command?: string;
+  command_id?: string;
+  raw_text?: string;
+  topic?: string;
+  topic_id?: string;
+}
+
+export function sendResearchCommand(
+  sessionId: string,
+  payload: ResearchCommandPayload,
+): Promise<CommandResponse> {
+  return postJson(`/api/sessions/${sessionId}/research/commands`, payload);
+}
+
+export function cancelTopic(sessionId: string, topicId: string): Promise<CommandResponse> {
+  return postJson(`/api/sessions/${sessionId}/research/commands`, {
+    command: "cancel_topic",
+    topic_id: topicId,
+  });
+}
+
+export function resumeResearch(sessionId: string): Promise<CommandResponse> {
+  return postJson(`/api/sessions/${sessionId}/research/commands`, {
+    command: "resume",
+  });
+}
+
+export function getCurrentResearch(sessionId: string): Promise<CurrentResearchView> {
+  return getJson(`/api/sessions/${sessionId}/research/current`);
 }

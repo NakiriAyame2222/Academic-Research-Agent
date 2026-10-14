@@ -1,8 +1,3 @@
-"""稀疏检索（TF-IDF）与向量相似度的共享实现。
-
-从 rag/retriever.py 抽出来，让 SimpleVectorStore 与 ChromaVectorStore 共用同一套
-稀疏侧逻辑，避免两个后端的混合权重语义不一致，也避免循环 import。
-"""
 from __future__ import annotations
 
 import math

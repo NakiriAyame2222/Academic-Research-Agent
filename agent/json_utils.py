@@ -1,9 +1,3 @@
-"""LLM 结构化输出的容错解析。
-
-模型常把 JSON 包在 ```json 围栏里，或在 JSON 前后附一段说明文字。
-裸 json.loads 会直接失败并静默走 fallback 模板，所以这里统一做：
-剥围栏 -> 截取首个 {/[ 到末个 }/] -> json.loads。
-"""
 from __future__ import annotations
 
 import json

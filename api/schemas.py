@@ -2,22 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
-
-# 字段名与现有 state 严格对齐；来源见：
-# citations -> rag/retriever.py:build_citations
-# citation_audit -> agent/citation_check.py:audit_citations（真实结构是计划 schema 的超集）
-# tool_trace -> agent/tool_loop.py
-# evidence_status -> agent/nodes.py
-# 其余 -> agent/state.py
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ResearchRequest(BaseModel):
-    query: str
+    query: str = ""
     file_path: str | None = None
-    top_k: int | None = None
+    top_k: int | None = Field(default=None, ge=1, le=20)
     rebuild_index: bool = False
     resume: bool = False
+    explicit_resume: bool = False
+    command: str | None = None
 
 
 class SessionCreateResponse(BaseModel):
@@ -71,17 +66,60 @@ class EvidenceStatusItem(BaseModel):
     evidence_count: int = 0
 
 
+class SubtopicView(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = ""
+    name: str = ""
+    status: str = "queued"
+    error: str = ""
+    retry_count: int = 0
+    latest_progress: str = ""
+    started_at: float | None = None
+    finished_at: float | None = None
+
+
+class CommandRequest(BaseModel):
+    command_id: str | None = None
+    command: str | None = None
+    raw_text: str | None = None
+    topic: str | None = None
+    topic_id: str | None = None
+
+
+class CommandResponse(BaseModel):
+    command_id: str = ""
+    status: str = "accepted"  # accepted | rejected | clarification_needed | ignored
+    message: str = ""
+    topic_id: str | None = None
+    topic_name: str | None = None
+    phase: str = ""
+    clarification_options: list[dict[str, str]] = []
+    job_id: str | None = None
+
+
 class ProgressEvent(BaseModel):
+    model_config = ConfigDict(extra="allow")
     id: int = 0
     stage: str = ""
     message: str = ""
     timestamp: str = ""
+    topic_id: str | None = None
+    topic_name: str | None = None
+    topic_status: str | None = None
+    command_id: str | None = None
+    phase: str | None = None
+    details: dict[str, Any] | None = None
+    options: list[dict[str, str]] | None = None
 
 
 class ResearchResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
     session_id: str = ""
     intent_mode: str = ""
+    discussion_intent: str = ""
+    discussion: dict[str, Any] | None = None
+    discussion_scope: str | None = None
+    discussion_sources: list[str] = []
     final_answer: str = ""
     survey_artifact: dict[str, Any] = {}
     citations: list[Citation] = []
@@ -99,12 +137,25 @@ class ResearchResult(BaseModel):
 
 
 class JobView(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     job_id: str
     session_id: str
     status: str
+    phase: str = ""
+    topics: list[SubtopicView] = []
+    commands: list[dict[str, Any]] = []
     events: list[ProgressEvent] = []
     result: ResearchResult | None = None
     error: str = ""
+
+
+class CurrentResearchView(BaseModel):
+    session_id: str
+    job_id: str | None = None
+    is_active: bool = False
+    phase: str = ""
+    can_resume: bool = False
+    topics: list[SubtopicView] = []
 
 
 class HealthResponse(BaseModel):
@@ -142,3 +193,7 @@ class MemorySaveRequest(BaseModel):
 
 class MemorySaveResponse(BaseModel):
     saved: int = 0
+
+
+class ResearchNoteRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=20000)

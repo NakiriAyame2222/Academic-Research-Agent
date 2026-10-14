@@ -3,6 +3,8 @@
 把本项目的**本地论文检索能力对外暴露成 MCP server**，供 Claude Desktop 之类的客户端调用。
 注意方向：这不是"让本 agent 去调别人的 MCP 工具"，而是反过来。
 
+仅在需要从外部客户端调用论文库时安装此扩展。Web 核心依赖不包含 fastmcp。
+
 ## 暴露的工具
 
 | 工具 | 作用 |
@@ -13,18 +15,15 @@
 | `search_arxiv_papers(query, max_results)` | 按英文关键词检索 arXiv |
 | `get_paper_notes(topic, limit)` | 读取 agent 此前写进 SQLite 的论文笔记 |
 
-索引与 CLI 主流程**共用同一份**：`data_dir=data/papers`、`persist_dir=data/vector_store/corpus`。
+索引与研究后端**共用同一份**：`data_dir=data/papers`、`persist_dir=data/vector_store/corpus`。
 
 ## 启动
 
 ```bash
-pip install fastmcp
+pip install -r requirements-mcp.txt
 
 # 默认 stdio（Claude Desktop 用这个）
 python -m mcp_server.server
-
-# 或通过主 CLI
-python app.py --serve-mcp
 
 # HTTP 传输
 python -m mcp_server.server --transport http --host 127.0.0.1 --port 8000
@@ -43,7 +42,7 @@ python -m mcp_server.server --rebuild-index
     "research-agent": {
       "command": "python",
       "args": ["-m", "mcp_server.server"],
-      "cwd": "D:/C/简历文件/agent-project-research",
+      "cwd": "D:/C/简历文件/learning_test_code",
       "env": {
         "PYTHONIOENCODING": "utf-8",
         "RESEARCH_AGENT_EMBEDDING_MODEL": "Qwen/Qwen3-Embedding-4B",

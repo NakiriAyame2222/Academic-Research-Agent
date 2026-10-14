@@ -1,12 +1,73 @@
 from __future__ import annotations
 
-from typing import Callable
+from pathlib import Path
+from typing import Any, Callable
 
 from config import get_settings
 from rag.retriever import get_file_scope_dir, get_session_scope_dir, initialize_retriever, retrieve_documents
 from tools.arxiv_search import download_arxiv_pdf, expand_topic_queries, search_arxiv, search_surveys
+from agent.deep_research_pipeline import normalize_and_dedupe_candidates
 
 ProgressCallback = Callable[[str], None]
+
+
+def search_metadata_candidates(
+    topic: str,
+    query_batches: list[dict] | None = None,
+    max_candidates: int = 30,
+    progress_callback: ProgressCallback | None = None,
+    cancel_event: Any | None = None,
+) -> dict[str, Any]:
+    """Collect a bounded, metadata-only candidate pool for one subtopic.
+
+    Unlike the legacy academic search helper this function does not run a
+    separate survey branch and does not download or index anything.  Survey
+    queries are ordinary query batches, so survey and non-survey results enter
+    the same deduplicated pool.
+    """
+    limit = max(0, int(max_candidates))
+    batches = [item for item in (query_batches or []) if str(item.get("query", "")).strip()]
+    if not batches:
+        raise ValueError("metadata search requires LLM-generated English query batches")
+    raw_candidates: list[dict[str, Any]] = []
+    search_runs: list[dict[str, Any]] = []
+    for index, batch in enumerate(batches, 1):
+        if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+            raise InterruptedError("Search cancelled")
+        remaining = limit - len(normalize_and_dedupe_candidates(raw_candidates, max_per_subtopic=limit))
+        if remaining <= 0:
+            break
+        query = " ".join(str(batch.get("query", "")).split())
+        label = str(batch.get("label") or query)
+        if progress_callback:
+            progress_callback(f"搜索候选元数据 {index}/{len(batches)}：{label}")
+        kwargs: dict[str, Any] = {
+            "max_results": min(remaining, max(1, int(batch.get("max_results") or remaining))),
+            "progress_callback": progress_callback,
+        }
+        if cancel_event is not None:
+            kwargs["cancel_event"] = cancel_event
+        results = search_arxiv(query, **kwargs)
+        tagged = []
+        for paper in results:
+            item = dict(paper)
+            item["query"] = query
+            item["query_label"] = label
+            item["subtopic"] = topic
+            item["source_type"] = "survey" if any(word in label.lower() for word in ("survey", "review", "overview", "tutorial")) else "paper"
+            tagged.append(item)
+        raw_candidates.extend(tagged)
+        search_runs.append({"label": label, "query": query, "results": tagged})
+    candidates = normalize_and_dedupe_candidates(raw_candidates, max_per_subtopic=limit)
+    if progress_callback:
+        progress_callback(f"候选元数据搜索完成：{len(candidates)}/{limit} 篇")
+    return {
+        "queries": [str(item.get("query", "")) for item in batches],
+        "candidates": candidates,
+        "papers": candidates,
+        "surveys": [item for item in candidates if item.get("source_type") == "survey"],
+        "search_runs": search_runs,
+    }
 
 
 
@@ -49,19 +110,34 @@ def search_academic_topic(
     max_results: int = 5,
     query_batches: list[dict] | None = None,
     progress_callback: ProgressCallback | None = None,
+    cancel_event: Any | None = None,
 ) -> dict[str, list[dict]]:
+    if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+        raise InterruptedError("Search cancelled")
     if progress_callback:
         progress_callback(f"开始检索主题：{topic}")
-    surveys = search_surveys(topic, max_results=max_results, progress_callback=progress_callback)
+    survey_kwargs = {"max_results": max_results, "progress_callback": progress_callback}
+    if cancel_event is not None:
+        survey_kwargs["cancel_event"] = cancel_event
+    surveys = search_surveys(topic, **survey_kwargs)
+    if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+        raise InterruptedError("Search cancelled")
     batch_items = query_batches or [{"label": "default", "query": query} for query in expand_topic_queries(topic)]
     papers: list[dict] = []
     search_runs: list[dict] = []
     for index, batch in enumerate(batch_items, 1):
+        if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+            raise InterruptedError("Search cancelled")
         query = batch.get("query", topic)
         label = batch.get("label", query)
         if progress_callback:
             progress_callback(f"执行第 {index}/{len(batch_items)} 轮搜索：{label} -> {query}")
-        results = search_arxiv(query, max_results=max_results, progress_callback=progress_callback)
+        arxiv_kwargs = {"max_results": max_results, "progress_callback": progress_callback}
+        if cancel_event is not None:
+            arxiv_kwargs["cancel_event"] = cancel_event
+        results = search_arxiv(query, **arxiv_kwargs)
+        if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+            raise InterruptedError("Search cancelled")
         for paper in results:
             paper.setdefault("query", query)
             paper["query_label"] = label
@@ -85,23 +161,46 @@ def build_selected_papers_index(
     papers: list[dict],
     rebuild: bool = True,
     progress_callback: ProgressCallback | None = None,
+    topic_id: str | None = None,
+    cancel_event: Any | None = None,
+    persist_dir: str | Path | None = None,
+    run_id: str | None = None,
 ) -> tuple[str, list[dict]]:
+    if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+        raise InterruptedError("Index build cancelled")
     settings = get_settings()
-    downloads_dir = settings["downloads_dir"] / session_id
+    parent_sid = session_id.split("__")[0].split("/")[0]
+    downloads_dir = settings["downloads_dir"] / parent_sid
     downloaded: list[dict] = []
     for index, paper in enumerate(papers, 1):
+        if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+            raise InterruptedError("Index build cancelled")
         if progress_callback:
             progress_callback(f"准备第 {index}/{len(papers)} 篇代表论文全文：{paper.get('title', 'unknown')}")
         try:
-            file_path = download_arxiv_pdf(paper, downloads_dir, progress_callback=progress_callback)
+            pdf_kwargs = {"progress_callback": progress_callback}
+            if cancel_event is not None:
+                pdf_kwargs["cancel_event"] = cancel_event
+            file_path = download_arxiv_pdf(paper, downloads_dir, **pdf_kwargs)
+        except InterruptedError:
+            raise
         except Exception as exc:
             if progress_callback:
                 progress_callback(f"全文下载失败，跳过：{paper.get('title', 'unknown')}（{exc}）")
             continue
+        if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+            raise InterruptedError("Index build cancelled")
         if not file_path:
             continue
         downloaded.append({**paper, "file_path": file_path})
-    persist_dir = get_session_scope_dir(settings["vector_store_dir"], session_id, "selected_papers")
+    if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+        raise InterruptedError("Index build cancelled")
+    if persist_dir:
+        target_persist_dir = Path(persist_dir)
+    else:
+        run_scope = f"{parent_sid}__{run_id}" if run_id else parent_sid
+        scope_name = f"selected_papers_{topic_id}" if topic_id else "selected_papers"
+        target_persist_dir = get_session_scope_dir(settings["vector_store_dir"], run_scope, scope_name)
     file_paths = [item["file_path"] for item in downloaded]
     # 下载后的文件名是 _safe_name(arxiv_id) 生成的哈希名，不含标题。
     # 这里把 arxiv_id / 标题写进 chunk metadata，让下游能把证据块归属到具体论文。
@@ -117,7 +216,7 @@ def build_selected_papers_index(
         progress_callback(f"开始为 {len(file_paths)} 篇全文建立索引")
     initialize_retriever(
         data_dir=None,
-        persist_dir=persist_dir,
+        persist_dir=target_persist_dir,
         chunk_size=settings["chunk_size"],
         chunk_overlap=settings["chunk_overlap"],
         rebuild=rebuild,
@@ -126,4 +225,4 @@ def build_selected_papers_index(
     )
     if progress_callback:
         progress_callback("全文索引构建完成")
-    return str(persist_dir), downloaded
+    return str(target_persist_dir), downloaded
