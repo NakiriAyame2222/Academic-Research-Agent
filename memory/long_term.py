@@ -23,9 +23,27 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
+def _uses_storage_schema(conn: sqlite3.Connection) -> bool:
+    """Return whether ``db_path`` is the new storage.Database schema."""
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "user_preferences" not in tables:
+        return False
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(user_preferences)")}
+    return "preferences_json" in columns
+
+
 def init_db(db_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
+        if _uses_storage_schema(conn):
+            return
+        # A new formal database is initialized through the storage API.  The
+        # legacy schema below remains available for old memory.db fixtures.
+        if Path(db_path).name == "app.db":
+            from storage import Database
+
+            Database(db_path).close()
+            return
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS user_preferences (
@@ -85,6 +103,17 @@ def init_db(db_path: str) -> None:
 
 def get_user_preferences(user_id: str, db_path: str) -> dict[str, Any]:
     with sqlite3.connect(db_path) as conn:
+        if _uses_storage_schema(conn):
+            row = conn.execute(
+                "SELECT preferences_json FROM user_preferences WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            if row is None:
+                return {"user_id": user_id, **DEFAULT_PREFERENCES}
+            try:
+                preferences = json.loads(row[0])
+            except (TypeError, json.JSONDecodeError):
+                preferences = {}
+            return {"user_id": user_id, **DEFAULT_PREFERENCES, **preferences}
         row = conn.execute(
             "SELECT preferences FROM user_preferences WHERE user_id = ?",
             (user_id,),
@@ -101,6 +130,16 @@ def get_user_preferences(user_id: str, db_path: str) -> dict[str, Any]:
 def update_user_preferences(user_id: str, preferences: dict[str, Any], db_path: str) -> None:
     serialized = json.dumps(preferences, ensure_ascii=False)
     with sqlite3.connect(db_path) as conn:
+        if _uses_storage_schema(conn):
+            conn.execute(
+                """INSERT INTO user_preferences(user_id, preferences_json, updated_at)
+                   VALUES (?, ?, datetime('now'))
+                   ON CONFLICT(user_id) DO UPDATE SET preferences_json=excluded.preferences_json,
+                   updated_at=excluded.updated_at""",
+                (user_id, serialized),
+            )
+            conn.commit()
+            return
         conn.execute(
             """
             INSERT INTO user_preferences (user_id, preferences)
@@ -127,6 +166,23 @@ def save_paper_note(note: dict[str, Any], db_path: str) -> None:
         str(note.get("source_url", "") or ""),
     )
     with sqlite3.connect(db_path) as conn:
+        if _uses_storage_schema(conn):
+            session_id = str(note.get("session_id") or "").strip() or None
+            if session_id:
+                conn.execute(
+                    """INSERT OR IGNORE INTO sessions(id, title, status, metadata_json, created_at, updated_at)
+                       VALUES (?, ?, 'archived', '{}', datetime('now'), datetime('now'))""",
+                    (session_id, str(note.get("title") or "")),
+                )
+            metadata = {key: note.get(key) for key in ("topic", "title", "arxiv_id", "source_url") if note.get(key) is not None}
+            content = str(note.get("summary") or "").strip() or json.dumps(note, ensure_ascii=False)
+            conn.execute(
+                """INSERT INTO paper_notes(id, session_id, document_id, note_type, content, metadata_json,
+                   created_at, updated_at) VALUES (?, ?, NULL, 'note', ?, ?, datetime('now'), datetime('now'))""",
+                (str(note.get("note_id") or note.get("id") or f"legacy-note-{abs(hash(content))}"), session_id, content, json.dumps(metadata, ensure_ascii=False)),
+            )
+            conn.commit()
+            return
         conn.execute(
             """
             INSERT INTO paper_notes (
@@ -143,6 +199,21 @@ def save_paper_note(note: dict[str, Any], db_path: str) -> None:
 def save_session_artifact(session_id: str, artifact_type: str, content: dict[str, Any], db_path: str) -> None:
     serialized = json.dumps(content, ensure_ascii=False)
     with sqlite3.connect(db_path) as conn:
+        if _uses_storage_schema(conn):
+            conn.execute(
+                """INSERT OR IGNORE INTO sessions(id, title, status, metadata_json, created_at, updated_at)
+                   VALUES (?, '', 'archived', '{}', datetime('now'), datetime('now'))""",
+                (session_id,),
+            )
+            conn.execute(
+                """INSERT INTO research_artifacts(id, session_id, kind, artifact_key, payload_json, created_at, updated_at)
+                   VALUES (?, ?, ?, 'legacy', ?, datetime('now'), datetime('now'))
+                   ON CONFLICT(session_id, kind, artifact_key) DO UPDATE SET payload_json=excluded.payload_json,
+                   updated_at=excluded.updated_at""",
+                (f"legacy-artifact-{abs(hash((session_id, artifact_type)))}", session_id, artifact_type, serialized),
+            )
+            conn.commit()
+            return
         conn.execute(
             "DELETE FROM session_artifacts WHERE session_id = ? AND artifact_type = ?",
             (session_id, artifact_type),
@@ -169,6 +240,25 @@ def _row_to_memory(row: tuple[Any, ...]) -> dict[str, Any]:
 
 def _fetch_all_memories(user_id: str, db_path: str) -> list[dict[str, Any]]:
     with sqlite3.connect(db_path) as conn:
+        if _uses_storage_schema(conn):
+            rows = conn.execute(
+                """SELECT id, kind, content, metadata_json, created_at, NULL
+                   FROM memories ORDER BY updated_at DESC"""
+            ).fetchall()
+            result = []
+            for row in rows:
+                try:
+                    metadata = json.loads(row[3] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    metadata = {}
+                if metadata.get("user_id") not in {None, "", user_id}:
+                    continue
+                result.append({
+                    "item_id": row[0], "topic": metadata.get("topic", ""),
+                    "memory_type": row[1], "content": row[2], "source_ref": metadata.get("source_ref", ""),
+                    "created_at": row[4], "embedding": row[5],
+                })
+            return result
         rows = conn.execute(
             """
             SELECT item_id, topic, memory_type, content, source_ref, created_at, embedding
@@ -208,6 +298,10 @@ def _recency_bonus(rank: int, total: int) -> float:
 def backfill_memory_embeddings(user_id: str, db_path: str) -> int:
     """给历史记忆惰性补 embedding；embedder 不可用时直接返回 0。"""
     from config import get_embedder
+
+    with sqlite3.connect(db_path) as conn:
+        if _uses_storage_schema(conn):
+            return 0
 
     embedder = get_embedder()
     if embedder is None:
@@ -297,6 +391,20 @@ def save_memory_item(user_id: str, topic: str, memory_type: str, content: str, s
         embedding_json = None
 
     with sqlite3.connect(db_path) as conn:
+        if _uses_storage_schema(conn):
+            memory_id = f"legacy-memory-{abs(hash((user_id, topic, memory_type, content, source_ref)))}"
+            # Use the formal repository so memory_items outbox work is durable.
+            from storage import Database
+
+            formal_db = Database(db_path)
+            formal_db.repositories.memories.upsert(
+                content,
+                kind=memory_type,
+                metadata={"user_id": user_id, "topic": topic, "source_ref": source_ref},
+                memory_id=memory_id,
+            )
+            formal_db.close()
+            return
         conn.execute(
             "INSERT INTO memory_items (user_id, topic, memory_type, content, source_ref, embedding) VALUES (?, ?, ?, ?, ?, ?)",
             (user_id, topic, memory_type, content, source_ref, embedding_json),

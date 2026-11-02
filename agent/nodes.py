@@ -152,6 +152,12 @@ def _infer_intent_mode(state: dict[str, Any], query: str) -> str:
     )
 
 
+def _is_local_paper_qa(state: dict[str, Any]) -> bool:
+    return state.get("intent_mode") == "paper_qa" and bool(
+        state.get("paper_path") or state.get("active_document", {}).get("file_path")
+    )
+
+
 def _parse_json_object(raw: str) -> dict[str, Any]:
     """保留原函数名；实现改为带 markdown 围栏剥离的容错解析。"""
     return parse_json_object(raw)
@@ -268,11 +274,17 @@ def planner_agent(state: dict[str, Any]) -> dict[str, Any]:
         emit_progress(state, "planner", "识别为论文问答模式")
 
     user_profile = get_user_preferences(state["user_id"], str(settings["sqlite_db_path"]))
-    state["long_term_memories"] = retrieve_relevant_long_term_memories(
-        state["user_id"],
-        state.get("topic", "") or query,
-        str(settings["sqlite_db_path"]),
-    )
+    # A single uploaded paper is self-contained.  Do not make its planner
+    # wait for the optional embedding service while recalling unrelated long-
+    # term memories; paper QA only needs the selected document and user prefs.
+    if state["intent_mode"] == "topic_research":
+        state["long_term_memories"] = retrieve_relevant_long_term_memories(
+            state["user_id"],
+            state.get("topic", "") or query,
+            str(settings["sqlite_db_path"]),
+        )
+    else:
+        state["long_term_memories"] = []
     if state["long_term_memories"]:
         emit_progress(state, "planner", f"召回 {len(state['long_term_memories'])} 条相关长期记忆")
 
@@ -285,17 +297,24 @@ def planner_agent(state: dict[str, Any]) -> dict[str, Any]:
     state["evidence_gaps"] = []
     state["tool_trace"] = []
 
-    planner_prompt = get_planner_prompt(
-        query,
-        user_profile,
-        template,
-        state.get("mode", "report"),
-        initial_question=state.get("initial_user_question", ""),
-        middle_summary=state.get("conversation_summary_middle", ""),
-        recent_messages=state.get("recent_messages", state.get("messages", [])),
-    )
-    emit_progress(state, "planner", "正在生成本轮任务规划摘要")
-    state["task_plan"] = _call_llm_with_progress(state, "planner", planner_prompt, system=PLANNER_SYSTEM)
+    if _is_local_paper_qa(state):
+        # Paper QA has a fixed, local workflow.  Calling a remote planner here
+        # adds no useful routing decision and makes an uploaded PDF depend on a
+        # second network round before it can even be searched.
+        state["task_plan"] = "直接在所选本地论文的全文索引中检索证据，再生成带引用的回答。"
+        emit_progress(state, "planner", "论文问答使用本地检索流程，跳过远程任务规划")
+    else:
+        planner_prompt = get_planner_prompt(
+            query,
+            user_profile,
+            template,
+            state.get("mode", "report"),
+            initial_question=state.get("initial_user_question", ""),
+            middle_summary=state.get("conversation_summary_middle", ""),
+            recent_messages=state.get("recent_messages", state.get("messages", [])),
+        )
+        emit_progress(state, "planner", "正在生成本轮任务规划摘要")
+        state["task_plan"] = _call_llm_with_progress(state, "planner", planner_prompt, system=PLANNER_SYSTEM)
 
     if state.get("intent_mode") == "topic_research":
         search_plan = _build_topic_search_plan(state, state["topic"], user_profile)
@@ -398,7 +417,15 @@ def evidence_agent(state: dict[str, Any]) -> dict[str, Any]:
         )
         system_prompt = PAPER_QA_AGENT_SYSTEM
 
-    loop_result = run_tool_loop(state, specs, context, system_prompt, goal_prompt)
+    if _is_local_paper_qa(state):
+        # Local paper QA already has a bounded, deterministic retrieval tool.
+        # Avoid probing tool calling on the remote endpoint: unsupported or
+        # slow tool requests otherwise look like a planner/search hang and can
+        # trigger the long network retry policy.
+        emit_progress(state, "tool", "本地论文问答跳过远程工具调用，使用确定性全文检索")
+        loop_result = {"degraded": True, "steps": 0, "trace": [], "finish_reason": "local_paper"}
+    else:
+        loop_result = run_tool_loop(state, specs, context, system_prompt, goal_prompt)
     trace = loop_result.get("trace", [])
     state["tool_trace"] = list(state.get("tool_trace", [])) + trace
     state["tool_loop_degraded"] = bool(loop_result.get("degraded"))
@@ -622,20 +649,12 @@ def research_agent(state: dict[str, Any]) -> dict[str, Any]:
             f"全文笔记整理完成，共 {len(fulltext_notes)} 篇，引用池 {len(evidence_pool)} 个片段",
         )
     else:
-        emit_progress(state, "research", "开始基于检索证据撰写研究笔记")
-        prompt = get_research_prompt(
-            query,
-            docs_text,
-            state.get("report_template", {}).get("guidelines", []),
-            state.get("mode", "report"),
-            state.get("initial_user_question", ""),
-            state.get("conversation_summary_middle", ""),
-            state.get("recent_messages", state.get("messages", [])),
-            state.get("memory_summary", ""),
-            state.get("long_term_memories", []),
-            task_plan=state.get("task_plan", ""),
-        )
-        state["research_notes"] = _call_llm_with_progress(state, "research", prompt, system=RESEARCH_SYSTEM)
+        # For a single local paper the retrieved chunks are already the
+        # evidence set.  Keep this stage deterministic and reserve the one
+        # remote generation for the final answer; otherwise a transient LLM
+        # outage in an intermediate "notes" call prevents paper reading.
+        emit_progress(state, "research", "使用本地检索片段作为回答证据")
+        state["research_notes"] = docs_text
         state["evidence_status"] = []
         emit_progress(state, "research", "研究笔记生成完成")
 
@@ -649,6 +668,19 @@ def research_agent(state: dict[str, Any]) -> dict[str, Any]:
 def reflect_evidence(state: dict[str, Any]) -> dict[str, Any]:
     max_rounds = int(get_settings().get("max_research_rounds") or 2)
     round_index = int(state.get("research_rounds", 1))
+    if _is_local_paper_qa(state):
+        state["reflection"] = {
+            "sufficient": True,
+            "evidence_gaps": [],
+            "open_questions": [],
+            "next_queries": [],
+            "reason": "local paper evidence is sufficient for direct QA",
+            "stop_reason": "paper_qa_direct",
+        }
+        state["evidence_gaps"] = []
+        state["open_questions"] = []
+        emit_progress(state, "reflect", "本地论文证据已准备完成，进入回答撰写")
+        return state
     emit_progress(state, "reflect", "正在审查证据是否足够支撑结论")
     reflection = research_service.review_evidence(
         _get_query(state), state.get("intent_mode", "topic_research"), state.get("research_notes", ""),
@@ -740,13 +772,23 @@ def _persist_report(state: dict[str, Any], report: str) -> str:
         session_id = str(state.get("session_id", state.get("user_id", "default")))
         raw_slug = state.get("topic") or state.get("initial_user_question") or "report"
         slug = re.sub(r"[^0-9A-Za-z一-鿿]+", "_", str(raw_slug)).strip("_")[:40] or "report"
-        target = str(settings["reports_dir"] / f"{session_id}_{slug}.md")
+        target = str(settings["reports_dir"] / f"{session_id}.md")
     try:
         save_report(target, report)
     except OSError as exc:
         emit_progress(state, "report", f"报告写入失败：{exc}")
         return ""
     emit_progress(state, "report", f"报告已写入：{target}")
+    try:
+        from memory.short_term import storage_path
+        from storage import Database
+        session_id = str(state.get("session_id", state.get("user_id", "default")))
+        with Database(storage_path()) as db:
+            if db.repositories.sessions.get(session_id) is None:
+                db.repositories.sessions.create(session_id=session_id, user_id=str(state.get("user_id") or "default"), topic=str(state.get("topic") or ""))
+            db.repositories.reports.save_next(session_id, report, status="current", metadata={"path": target})
+    except Exception as exc:
+        emit_progress(state, "report", f"报告版本写入数据库失败：{exc}")
     return target
 
 

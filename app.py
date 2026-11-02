@@ -1,3 +1,4 @@
+"""启动学术研究 Web 服务；研究交互统一通过浏览器与 HTTP API 完成。"""
 from __future__ import annotations
 
 import argparse

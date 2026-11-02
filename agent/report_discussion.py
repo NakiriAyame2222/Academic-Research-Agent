@@ -1,3 +1,10 @@
+"""Reusable context and routing helpers for completed-report discussions.
+
+The report discussion flow is deliberately a fresh-context flow.  It keeps the
+finished report and its durable research artifacts, rather than replaying a
+search/tool transcript.  Full-text retrieval is an explicit, opt-in step so a
+normal follow-up cannot accidentally turn into another research run.
+"""
 from __future__ import annotations
 
 from copy import deepcopy

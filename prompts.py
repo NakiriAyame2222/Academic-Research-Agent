@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+# 改动前所有角色设定都塞在唯一一条 user message 里，没有用 system role。
+# 这里把角色设定抽成常量，由 agent/llm.py 放进真正的 system message。
 PLANNER_SYSTEM = "你是一个学术研究任务规划助手，擅长把模糊的研究请求拆解成可执行的检索与分析计划。"
 REWRITE_SYSTEM = "你是一个学术问答检索改写助手，只输出改写后的查询本身。"
 SEARCH_PLAN_SYSTEM = "你是一个学术调研规划助手，只输出严格的 JSON 对象，不要附加解释文字。"

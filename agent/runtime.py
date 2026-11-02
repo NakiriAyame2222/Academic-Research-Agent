@@ -1,3 +1,4 @@
+"""研究后端：初始化检索、运行研究图并保存检查点，独立于 Web 启动入口。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -5,6 +6,7 @@ from typing import Any, Callable
 
 from agent.graph import build_graph
 from agent.intent import SUPPORTED_PAPER_EXTENSIONS, classify_intent
+from agent.progress import emit_progress
 from agent.state import build_initial_state
 from agent.report_discussion import (
     build_discussion_prompt, build_research_context, classify_follow_up, is_completed_report_state,
@@ -32,12 +34,20 @@ def resolve_file_path(query: str, explicit_file_path: str | None = None) -> str 
 def initialize_app(
     rebuild_index: bool = False,
     file_path: str | None = None,
+    use_embeddings: bool = True,
+    progress_event_callback: Callable[[dict[str, Any]], None] | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
+    setup_state = {
+        "progress_event_callback": progress_event_callback,
+        "progress_callback": progress_callback,
+    }
     ensure_directories(settings)
     init_db(str(settings["sqlite_db_path"]))
 
     if file_path:
+        emit_progress(setup_state, "index", "正在解析本地论文并准备全文索引")
         persist_dir = get_file_scope_dir(settings["vector_store_files_dir"], file_path)
         vector_store = initialize_retriever(
             data_dir=None,
@@ -46,7 +56,9 @@ def initialize_app(
             chunk_overlap=settings["chunk_overlap"],
             rebuild=rebuild_index,
             file_path=file_path,
+            use_embeddings=use_embeddings,
         )
+        emit_progress(setup_state, "index", "本地论文全文索引已就绪（使用稀疏检索）" if not use_embeddings else "本地论文全文索引已就绪")
     else:
         persist_dir = settings["vector_store_corpus_dir"]
         vector_store = initialize_retriever(
@@ -55,6 +67,7 @@ def initialize_app(
             chunk_size=settings["chunk_size"],
             chunk_overlap=settings["chunk_overlap"],
             rebuild=rebuild_index,
+            use_embeddings=use_embeddings,
         )
 
     graph = build_graph()
@@ -96,7 +109,16 @@ def run_research(
         resume = False
         new_research = True
     intent_mode = "topic_research" if new_research else detect_intent_mode(query, resolved_file_path)
-    app_context = initialize_app(rebuild_index=rebuild_index, file_path=resolved_file_path if intent_mode == "paper_qa" else None)
+    app_context = initialize_app(
+        rebuild_index=rebuild_index,
+        file_path=resolved_file_path if intent_mode == "paper_qa" else None,
+        # A local paper must still be readable when the optional remote
+        # embedding service is slow or unavailable.  Sparse retrieval is
+        # deterministic and does not block the planner on a network call.
+        use_embeddings=not (intent_mode == "paper_qa" and resolved_file_path),
+        progress_event_callback=progress_event_callback,
+        progress_callback=progress_callback,
+    )
     current_session_id = session_id or user_id
     mode = "paper_explain" if intent_mode == "paper_qa" else "topic_research"
     initial_state = build_initial_state(

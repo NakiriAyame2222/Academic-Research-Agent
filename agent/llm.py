@@ -1,3 +1,11 @@
+"""LLM 调用的统一入口。
+
+改动前只有 agent/nodes.py:_invoke_llm 一个私有函数，且所有角色设定都塞在
+唯一一条 user message 里。这里统一支持：
+- 真正的 system role
+- response_format={"type":"json_object"}（端点不支持时由 config.py 自动脱参）
+- 原生 tool calling（chat 返回 tool_calls）
+"""
 from __future__ import annotations
 
 import re
@@ -55,6 +63,14 @@ _PERMANENT_ERROR_MARKERS = (
     "certificate verify failed",
     "wrong version number",
     "invalid scheme",
+    # Some compatible endpoints return these as HTTP 429, but waiting through
+    # ten network retries cannot fix a per-minute/account token limit.
+    "tpm exceeded",
+    "rpm exceeded",
+    "endpointtpmexceeded",
+    "endpointrpmexceeded",
+    "quota exceeded",
+    "inference exceeds",
 )
 _LAST_ERROR: list[str] = []
 _RETRY_PROGRESS: ContextVar[Any] = ContextVar("llm_retry_progress", default=None)

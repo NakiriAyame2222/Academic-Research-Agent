@@ -56,7 +56,6 @@ def run_tool_loop(
             try:
                 result = chat_with_tools(messages, tools=tools_payload, cancel_event=cancel_ev)
             except TypeError:
-                # 兼容测试替身和第三方旧适配器仍使用旧签名的情况。
                 result = chat_with_tools(messages, tools=tools_payload)
         for notice in drain_degrade_notices():
             emit_progress(state, "tool", notice)

@@ -171,6 +171,11 @@ class HealthResponse(BaseModel):
     vector_backend: str = ""
     jieba: bool = False
     degrade_notices: list[str] = []
+    chroma_ready: bool = False
+    outbox_pending: int = 0
+    outbox_processing: int = 0
+    outbox_retry: int = 0
+    outbox_dead_letter: int = 0
 
 
 class SessionSummary(BaseModel):
@@ -188,10 +193,13 @@ class SessionDetail(BaseModel):
 
 
 class PaperInfo(BaseModel):
+    document_id: str = ""
     file_name: str
     file_path: str
     size_bytes: int = 0
     suffix: str = ""
+    vector_status: str = "pending"
+    file_url: str | None = None
 
 
 class MemorySaveRequest(BaseModel):

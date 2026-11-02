@@ -1,3 +1,9 @@
+"""Small, dependency-free building blocks for a deep-research pipeline.
+
+This module deliberately stops at the boundary of the LLM and search tools.  It
+normalizes search metadata, records the selector/reviewer decisions, and keeps
+the artifacts deterministic; it does not download papers or call a model.
+"""
 from __future__ import annotations
 
 import json

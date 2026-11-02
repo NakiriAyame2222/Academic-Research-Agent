@@ -1,3 +1,13 @@
+"""交互式多主题学术研究调度器 (TopicScheduler)
+
+核心架构与保证：
+1. 统一单运行聚合：一次 Session 内支持多个独立子主题 (a, b, c) 并发取证，动态扩充 (d)，最终聚合为单份报告。
+2. 单点取消与分代校验：通过 Topic 级 cancel_event 即时打断异步/网络 I/O，并利用 generation 强拒收过期脏数据。
+3. 上下文与索引隔离：各主题拥有独立 ToolContext、独立模型消息历史，向量索引按 (session_id, topic_id) 隔离；文献下载按 session 共享缓存。
+4. 严格串行与排队：同一 TopicScheduler 默认且始终最多一个子主题 worker，排队主题在容量释放时启动。
+5. 幂等控制与持久化：指令通过 command_id 幂等去重；在关键状态流转（初始化、收单、状态变更、结转）均原子落盘。
+6. 中断与显式续跑：服务重启时仅从未完成主题断点续跑，保留已完成主题，不自动回放工具。
+"""
 from __future__ import annotations
 
 from agent import research_service
@@ -2101,9 +2111,8 @@ class TopicScheduler:
         settings = get_settings()
         reports_dir = Path(settings["reports_dir"])
         reports_dir.mkdir(parents=True, exist_ok=True)
-        slug = re.sub(r"[^0-9A-Za-z一-鿿]+", "_", self.initial_query).strip("_")[:40] or "report"
-        final_path = reports_dir / f"{self.session_id}_{self.run_id}_{slug}.md"
-        staged_path = reports_dir / f"{self.session_id}_{self.run_id}_{slug}.tmp_{uuid.uuid4().hex[:8]}.md"
+        final_path = reports_dir / f"{self.session_id}.md"
+        staged_path = reports_dir / f".{self.session_id}.tmp_{uuid.uuid4().hex[:8]}.md"
         try:
             staged_path.write_text(report, encoding="utf-8")
             with self._lock:
@@ -2115,6 +2124,15 @@ class TopicScheduler:
                         pass
                     return ""
                 staged_path.replace(final_path)
+            try:
+                from memory.short_term import storage_path
+                from storage import Database
+                with Database(storage_path()) as db:
+                    if db.repositories.sessions.get(self.session_id) is None:
+                        db.repositories.sessions.create(session_id=self.session_id, user_id=self.user_id, topic=self.initial_query)
+                    db.repositories.reports.save_next(self.session_id, report, status="current", metadata={"path": str(final_path)})
+            except Exception as exc:
+                logger.warning("Failed to persist report version: %s", exc)
             return str(final_path)
         except Exception as exc:
             try:

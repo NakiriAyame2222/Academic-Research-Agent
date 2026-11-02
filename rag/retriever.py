@@ -8,6 +8,7 @@ from typing import Any
 
 from config import get_embedder, get_settings
 from rag.loader import prepare_documents
+from storage import Database, ChromaOutboxWorker
 from rag.sparse import (
     DENSE_WEIGHT,
     SPARSE_WEIGHT,
@@ -23,7 +24,6 @@ _BACKEND_NOTICES: list[str] = []
 
 
 def _tokenize(text: str) -> list[str]:
-    """保留原函数名以兼容既有调用；实现改为共享的 CJK 感知分词。"""
     return tokenize(text)
 
 
@@ -125,6 +125,22 @@ class SimpleVectorStore:
         (persist_path / "idf.json").write_text(json.dumps(self.idf, ensure_ascii=False), encoding="utf-8")
 
 
+class UnavailableVectorStore:
+    """Non-fatal application state when optional Chroma is unavailable."""
+
+    backend = "chroma_unavailable"
+    documents: list[dict[str, Any]] = []
+
+    def as_retriever(self, search_kwargs: dict[str, Any] | None = None):
+        return self
+
+    def invoke(self, query: str) -> list[dict[str, Any]]:
+        return []
+
+    def persist(self) -> None:
+        return None
+
+
 def _normalize_persist_dir(persist_dir: str | Path) -> str:
     return str(Path(persist_dir))
 
@@ -148,7 +164,9 @@ def clear_vector_store_cache(persist_dir: str | None = None) -> None:
     _VECTOR_STORE_CACHE.pop(_normalize_persist_dir(persist_dir), None)
 
 
-def _build_embeddings(documents: list[dict[str, Any]]) -> list[list[float]]:
+def _build_embeddings(documents: list[dict[str, Any]], enabled: bool = True) -> list[list[float]]:
+    if not enabled:
+        return []
     embedder = get_embedder()
     if embedder is None or not documents:
         return []
@@ -204,30 +222,78 @@ def _meta_is_compatible(persist_dir: str, document_count: int) -> bool:
     return meta.get("tokenizer_version") == expected["tokenizer_version"] and meta.get("embedding_model") == expected["embedding_model"]
 
 
-def build_vector_store(documents: list[dict[str, Any]], persist_dir: str | None = None) -> Any:
+def build_vector_store(
+    documents: list[dict[str, Any]],
+    persist_dir: str | None = None,
+    *,
+    use_embeddings: bool = True,
+    db_path: str | Path | None = None,
+) -> Any:
     normalized_dir = _normalize_persist_dir(persist_dir) if persist_dir else None
-    embeddings = _build_embeddings(documents)
-    sparse_vectors, idf = build_sparse_index(documents)
-
     backend = _resolve_backend()
-    store: Any = None
-    if backend in {"auto", "chroma"} and normalized_dir and documents:
-        store = _try_build_chroma(documents, normalized_dir, embeddings, sparse_vectors, idf, strict=backend == "chroma")
+    if backend == "simple":  # Explicit migration/test compatibility only.
+        embeddings = _build_embeddings(documents, enabled=use_embeddings)
+        sparse_vectors, idf = build_sparse_index(documents)
+        store: Any = SimpleVectorStore(documents, embeddings=embeddings, sparse_vectors=sparse_vectors, idf=idf, persist_dir=normalized_dir)
+        store.persist()
+    else:
+        settings = get_settings()
+        effective_db_path = db_path or settings["sqlite_db_path"]
+        db = Database(effective_db_path)
+        scope = hashlib.sha256(str(normalized_dir or settings["chroma_dir"]).encode("utf-8")).hexdigest()[:24]
+        _ingest_documents(db, documents, scope=scope)
+        chroma_dir = settings["chroma_dir"]
+        try:
+            from rag.chroma_store import ChromaVectorStore
 
-    if store is None:
-        store = SimpleVectorStore(
-            documents,
-            embeddings=embeddings,
-            sparse_vectors=sparse_vectors,
-            idf=idf,
-            persist_dir=normalized_dir,
-        )
-
-    store.persist()
+            store = ChromaVectorStore.open(chroma_dir, db=db, db_path=effective_db_path, scope=scope)
+            # Direct library callers without an API lifespan still get a useful
+            # deterministic smoke path; the running app uses its registered worker.
+            worker = ChromaOutboxWorker(db, chroma_dir, embedder_factory=get_embedder)
+            if get_embedder() is not None:
+                worker.drain()
+        except Exception as exc:
+            _BACKEND_NOTICES.append(f"Chroma 未就绪，索引工作保留在 SQL outbox：{exc}")
+            store = UnavailableVectorStore()
     if normalized_dir:
-        _write_index_meta(normalized_dir, getattr(store, "backend", "simple"), len(documents))
+        if getattr(store, "backend", "chroma") == "simple":
+            # Formal Chroma storage has SQL + Chroma as its only persistence
+            # layers.  The JSON meta sidecar is retained only for the explicit
+            # legacy/simple test backend.
+            _write_index_meta(normalized_dir, getattr(store, "backend", "simple"), len(documents))
         _VECTOR_STORE_CACHE[normalized_dir] = store
     return store
+
+
+def _ingest_documents(db: Database, documents: list[dict[str, Any]], *, scope: str) -> None:
+    """Write source facts to SQL and enqueue stable IDs for Chroma indexing."""
+    for document in documents:
+        metadata = dict(document.get("metadata") or {})
+        metadata["index_scope"] = scope
+        source = str(metadata.get("source") or metadata.get("source_name") or "unknown")
+        page = metadata.get("page")
+        source_key = f"{source}|page={page}"
+        document_id = "doc-" + hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:32]
+        db.repositories.documents.upsert(
+            hashlib.sha256(source_key.encode("utf-8")).hexdigest(),
+            source_uri=source,
+            title=str(metadata.get("paper_title") or metadata.get("source_name") or source),
+            content=str(document.get("page_content") or ""),
+            document_id=document_id,
+            metadata=metadata,
+        )
+        chunk_index = int(metadata.get("chunk_index") or 0)
+        chunk_id = "chunk-" + hashlib.sha256(f"{source_key}|{chunk_index}|{document.get('page_content', '')}".encode("utf-8")).hexdigest()[:32]
+        row = db.repositories.document_chunks.upsert(
+            document_id,
+            chunk_index,
+            str(document.get("page_content") or ""),
+            page=int(page) if page is not None else None,
+            section_title=str(metadata.get("section_title") or ""),
+            metadata=metadata,
+            chunk_id=chunk_id,
+        )
+        document.setdefault("metadata", {})["chunk_id"] = str(row["id"])
 
 
 def _try_build_chroma(
@@ -259,35 +325,39 @@ def _try_build_chroma(
         return None
 
 
-def load_vector_store(persist_dir: str | Path) -> Any | None:
+def load_vector_store(persist_dir: str | Path, *, use_embeddings: bool = True, db_path: str | Path | None = None) -> Any | None:
     normalized_dir = _normalize_persist_dir(persist_dir)
     if normalized_dir in _VECTOR_STORE_CACHE:
-        return _VECTOR_STORE_CACHE[normalized_dir]
+        cached = _VECTOR_STORE_CACHE[normalized_dir]
+        if use_embeddings:
+            return cached
+        # A paper-QA run must remain usable when the embedding endpoint is
+        # unavailable.  Do not let a previously cached dense/Chroma store
+        # re-introduce a network call during local retrieval.
+        return cached
 
-    documents_file = Path(normalized_dir) / "documents.json"
-    if not documents_file.exists():
-        return None
-
-    documents = json.loads(documents_file.read_text(encoding="utf-8"))
-    if not _meta_is_compatible(normalized_dir, len(documents)):
-        _BACKEND_NOTICES.append("检索索引的分词/embedding 版本已变化，正在重建索引")
-        return None
-
-    embeddings_file = Path(normalized_dir) / "embeddings.json"
-    sparse_vectors_file = Path(normalized_dir) / "sparse_vectors.json"
-    idf_file = Path(normalized_dir) / "idf.json"
-    embeddings = json.loads(embeddings_file.read_text(encoding="utf-8")) if embeddings_file.exists() else []
-    sparse_vectors = json.loads(sparse_vectors_file.read_text(encoding="utf-8")) if sparse_vectors_file.exists() else []
-    idf = json.loads(idf_file.read_text(encoding="utf-8")) if idf_file.exists() else {}
-
-    store: Any | None = None
-    if _resolve_backend() in {"auto", "chroma"}:
-        store = _try_load_chroma(documents, normalized_dir, sparse_vectors, idf)
-
-    if store is None:
-        store = SimpleVectorStore(
-            documents, embeddings=embeddings, sparse_vectors=sparse_vectors, idf=idf, persist_dir=normalized_dir
-        )
+    settings = get_settings()
+    effective_db_path = db_path or settings["sqlite_db_path"]
+    db = Database(effective_db_path)
+    if _resolve_backend() == "simple":
+        documents_file = Path(normalized_dir) / "documents.json"
+        if not documents_file.exists():
+            return None
+        documents = json.loads(documents_file.read_text(encoding="utf-8"))
+        if not _meta_is_compatible(normalized_dir, len(documents)):
+            _BACKEND_NOTICES.append("检索索引的分词/embedding 版本已变化，正在重建索引")
+            return None
+        embeddings_file = Path(normalized_dir) / "embeddings.json"
+        sparse_vectors_file = Path(normalized_dir) / "sparse_vectors.json"
+        idf_file = Path(normalized_dir) / "idf.json"
+        store = SimpleVectorStore(documents, embeddings=json.loads(embeddings_file.read_text(encoding="utf-8")) if embeddings_file.exists() else [], sparse_vectors=json.loads(sparse_vectors_file.read_text(encoding="utf-8")) if sparse_vectors_file.exists() else [], idf=json.loads(idf_file.read_text(encoding="utf-8")) if idf_file.exists() else {}, persist_dir=normalized_dir)
+    else:
+        try:
+            from rag.chroma_store import ChromaVectorStore
+            scope = hashlib.sha256(str(normalized_dir).encode("utf-8")).hexdigest()[:24]
+            store = ChromaVectorStore.open(settings["chroma_dir"], db=db, db_path=effective_db_path, scope=scope)
+        except Exception:
+            store = UnavailableVectorStore()
     _VECTOR_STORE_CACHE[normalized_dir] = store
     return store
 
@@ -318,6 +388,8 @@ def rebuild_vector_store(
     file_path: str | None = None,
     file_paths: list[str] | None = None,
     extra_metadata: dict[str, dict[str, Any]] | None = None,
+    use_embeddings: bool = True,
+    db_path: str | Path | None = None,
 ) -> Any:
     normalized_dir = _normalize_persist_dir(persist_dir)
     clear_vector_store_cache(normalized_dir)
@@ -329,7 +401,7 @@ def rebuild_vector_store(
         file_paths=file_paths,
         extra_metadata=extra_metadata,
     )
-    return build_vector_store(documents, persist_dir=normalized_dir)
+    return build_vector_store(documents, persist_dir=normalized_dir, use_embeddings=use_embeddings, db_path=db_path)
 
 
 def initialize_retriever(
@@ -341,6 +413,8 @@ def initialize_retriever(
     file_path: str | None = None,
     file_paths: list[str] | None = None,
     extra_metadata: dict[str, dict[str, Any]] | None = None,
+    use_embeddings: bool = True,
+    db_path: str | Path | None = None,
 ) -> Any:
     normalized_dir = _normalize_persist_dir(persist_dir)
     if rebuild:
@@ -352,10 +426,12 @@ def initialize_retriever(
             file_path=file_path,
             file_paths=file_paths,
             extra_metadata=extra_metadata,
+            use_embeddings=use_embeddings,
+            db_path=db_path,
         )
 
-    store = load_vector_store(normalized_dir)
-    if store is not None and store.documents:
+    store = load_vector_store(normalized_dir, use_embeddings=use_embeddings, db_path=db_path)
+    if store is not None and getattr(store, "backend", "") != "chroma_unavailable":
         return store
 
     return rebuild_vector_store(
@@ -366,6 +442,8 @@ def initialize_retriever(
         file_path=file_path,
         file_paths=file_paths,
         extra_metadata=extra_metadata,
+        use_embeddings=use_embeddings,
+        db_path=db_path,
     )
 
 

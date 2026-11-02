@@ -1,6 +1,21 @@
+"""对外暴露本地论文检索能力的 MCP server。
+
+目录名从 `mcp/` 改成 `mcp_server/`：官方 Python SDK 的包名也叫 `mcp`，
+同名目录会让 `import mcp` 的解析结果取决于 sys.path 顺序。
+
+改动前的三个问题：
+1. 零调用点 —— 没有 __main__ 入口，CLI 也不调它；
+2. 索引参数指错 —— data_dir 给的是整个 data/（会把 reports/ 和 downloads/ 全扫进语料），
+   persist_dir 给的是 vector_store/ 根目录（CLI 主流程用的是子目录 vector_store/corpus）；
+3. run() 用 try/except TypeError 猜传输方式。
+
+现在：与研究后端共用 papers_dir + vector_store_corpus_dir 同一份索引，
+默认走 FastMCP 的 stdio，只有显式 http 传输才传 host/port。
+"""
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -121,15 +136,42 @@ def get_paper_notes(topic: str = "", limit: int = 10) -> list[dict[str, Any]]:
     db_path = Path(settings["sqlite_db_path"])
     if not db_path.exists():
         return []
-    sql = "SELECT topic, title, arxiv_id, problem, method, experiments, summary, source_url, created_at FROM paper_notes"
-    params: tuple[Any, ...] = ()
-    if topic:
-        sql += " WHERE topic LIKE ?"
-        params = (f"%{topic}%",)
-    sql += " ORDER BY created_at DESC LIMIT ?"
-    params = params + (max(1, min(int(limit), 50)),)
-
     with sqlite3.connect(str(db_path)) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(paper_notes)").fetchall()}
+        capped_limit = max(1, min(int(limit), 50))
+        if {"content", "metadata_json"} <= columns:
+            rows = conn.execute(
+                "SELECT content, metadata_json, created_at FROM paper_notes ORDER BY created_at DESC LIMIT ?",
+                (capped_limit,),
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for content, metadata_json, created_at in rows:
+                try:
+                    metadata = json.loads(metadata_json or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    metadata = {}
+                if topic and topic.lower() not in json.dumps(metadata, ensure_ascii=False).lower() and topic.lower() not in str(content).lower():
+                    continue
+                result.append({
+                    "topic": metadata.get("topic", ""),
+                    "title": metadata.get("title", ""),
+                    "arxiv_id": metadata.get("arxiv_id", ""),
+                    "problem": "",
+                    "method": "",
+                    "experiments": "",
+                    "summary": str(content or ""),
+                    "source_url": metadata.get("source_url", ""),
+                    "created_at": created_at,
+                })
+            return result[:capped_limit]
+
+        sql = "SELECT topic, title, arxiv_id, problem, method, experiments, summary, source_url, created_at FROM paper_notes"
+        params: tuple[Any, ...] = ()
+        if topic:
+            sql += " WHERE topic LIKE ?"
+            params = (f"%{topic}%",)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params = params + (capped_limit,)
         rows = conn.execute(sql, params).fetchall()
     keys = ["topic", "title", "arxiv_id", "problem", "method", "experiments", "summary", "source_url", "created_at"]
     return [dict(zip(keys, row)) for row in rows]

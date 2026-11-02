@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,19 @@ def _trim_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def report_download_url_for(state: dict[str, Any], session_id: str) -> str | None:
     """report_path 是服务器绝对路径：只转成下载 URL，且仅当文件确实在 data/ 内时。"""
     path = str((state or {}).get("report_path") or "")
+    if not path:
+        # Checkpoint state is authoritative, but older/current callers may
+        # only have the SQL report version and its materialized-file metadata.
+        try:
+            from memory.short_term import storage_path
+            from storage import Database
+            with Database(storage_path()) as db:
+                versions = db.repositories.reports.list(session_id)
+            if versions:
+                metadata = json.loads(versions[-1].get("metadata_json") or "{}")
+                path = str(metadata.get("path") or "")
+        except Exception:
+            path = ""
     if not path:
         return None
     try:

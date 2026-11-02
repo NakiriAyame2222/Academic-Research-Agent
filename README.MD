@@ -2,7 +2,7 @@
 
 [English README](README.en.md) ｜ [演示视频 demo.mp4](demo.mp4) ｜ [示例报告](data/reports/demo.md)
 
-面向学术场景的**全栈 Deep Research 智能体**：上传论文即可精读问答；输入一个研究主题，智能体会自动拆解子主题、并发检索 arXiv、下载并精读全文，生成**带引用审计**的结构化研究报告；报告完成后还可多轮追问、按需补充取证。内置开箱即用的 Web 界面、会话记忆体系与 MCP 扩展。
+面向学术场景的**全栈 Deep Research 智能体**：上传论文即可精读问答；输入一个研究主题，智能体会自动拆解子主题、检索 arXiv、下载并精读全文，生成**带引用审计**的结构化研究报告；报告完成后还可多轮追问、按需补充取证。内置开箱即用的 Web 界面、会话记忆体系与 MCP 扩展。
 
 ## 演示视频
 
@@ -12,16 +12,14 @@ https://github.com/user-attachments/assets/9d3b3449-e64d-493e-8bb5-715303a6c3be
 
 ## 核心特性
 
-- **论文问答（Paper QA）**：上传 PDF / MD / TXT 后对单篇论文提问；回答带 `[Sx]` 证据编号，可溯源到页码、章节与文本块。
-- **主题调研（Deep Research）**：LLM 规划检索计划并把主题拆成子主题，调度器对每个子主题独立执行「arXiv 元数据检索 → 候选去重与筛选 → PDF 下载与全文精读 → 结构化笔记」，最后聚合生成综述报告。
+- **论文问答（Paper QA）**：上传 PDF / MD / TXT 或复用论文库文件后对单篇论文提问；回答带 `[Sx]` 来源引用，可溯源到页码、章节与文本块。
+- **主题调研（Deep Research）**：输入研究主题，按子主题顺序执行「arXiv 检索 → 精选去重 → PDF 下载与全文精读 → 结构化笔记」，聚合生成结构化研究报告；运行中可动态追加、取消子主题，服务中断后可从 checkpoint 恢复继续执行。
 - **报告多轮讨论**：报告完成后继续追问，自动判定追问意图（报告内问题 / 需要补充证据 / 开启新调研），按需回到已有全文索引取证，不会重复下载。
-- **运行中动态控制**：调研进行中可随时发送自然语言指令——增加调研主题、取消某个子主题、取消整个任务、恢复中断任务；指令歧义时返回候选列表供澄清。
-- **中断恢复**：子主题级 checkpoint，服务重启后可只续跑未完成的主题，已完成的成果全部保留。
 - **引用溯源与审计**：证据池统一编号（S1、S2…），报告生成后自动校验引用有效性、标注无效引用、补全 Sources 段，并输出 `valid_reference_rate` 等审计指标。
-- **混合检索**：Chroma 向量索引 + TF-IDF 稀疏检索（jieba 中文分词），支持语料库 / 单文件 / 会话级三种索引作用域；无 Embedding API 时自动降级为纯稀疏检索。
-- **记忆体系**：短期 JSON checkpoint + 长期 SQLite（用户记忆、论文笔记、会话产物，按向量/关键词/时效排序召回）；超长对话自动 LLM 压缩；长期记忆候选在 Web 端确认后入库。
-- **Web 界面**：React SPA，SSE 实时进度（子主题状态卡片、工具调用轨迹、反思结论），报告渲染与引用高亮，论文上传与论文库管理，在线模型设置。
-- **MCP Server 扩展**：把本地论文库检索能力暴露给 Claude Desktop 等 MCP 客户端。
+- **混合检索**：Chroma 向量索引 + TF-IDF 稀疏检索（jieba 中文分词）；无 Embedding API 时自动降级为纯稀疏检索，向量索引可随时重建，SQLite 是事实源。
+- **记忆体系**：短期会话压缩、已保存研究笔记召回、论文笔记存档与子主题级 checkpoint，正式数据统一存入 `data/app.db`。
+- **Web 单一入口**：React SPA + SSE 实时进度（子主题状态、工具调用轨迹、反思结论），报告渲染与引用高亮；「研究设置」配置模型、检索默认值与输出偏好，自动化复用同一套 HTTP API。
+- **MCP Server 扩展（可选）**：把本地论文库检索能力暴露给 Claude Desktop 等 MCP 客户端，单独安装 `requirements-mcp.txt`。
 - **优雅降级**：端点不支持 tool calling / JSON mode 时自动脱参并切换确定性取证流程；无 LLM key 时进入明确的演示模式，不伪造答案。
 
 ## 系统架构
@@ -51,66 +49,45 @@ https://github.com/user-attachments/assets/9d3b3449-e64d-493e-8bb5-715303a6c3be
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 安装与启动
 
-要求 Python 3.10+。
+要求 Python 3.10+。仓库已附带前端构建产物（`web/dist`），仅使用时无需 Node：
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+python app.py
+# 打开 http://127.0.0.1:8000
 ```
 
-其中 `chromadb` 与 `jieba` 为可选增强：未安装时检索自动降级为内置存储 / 纯稀疏模式，功能不受影响。
+修改前端源码后需重新构建：
+
+```bash
+npm --prefix web ci
+npm --prefix web run build
+```
 
 ### 2. 配置模型
 
-推荐使用默认配置文件 `data/llm_config.env`（仓库已提供模板，把占位符替换为真实值即可）：
+复制 `data/llm_config.env.example` 为 `data/llm_config.env`（已被 .gitignore 忽略，不会上传），填入你的模型与 API Key；也可以启动后在 Web「研究设置」中直接填写，保存后写入 `data/llm_config.env` 并立即生效。
 
-```env
-LLM_MODEL=your-llm-model
-API_KEY=your-api-key
-BASE_URL=https://your-provider-url
-
-Embedding_MODEL=your-embedding-model
-Embedding_API_KEY=your-embedding-api-key
-Embedding_BASE_URL=your-embedding-provider-url
-```
-
-也可以启动时传入配置：
+已有 KEY=VALUE 配置文件可在启动时加载：
 
 ```bash
-python app.py --config-file your-config.env
+python app.py --config-file path/to/model.env
+# 自定义监听地址与端口
+python app.py --web-host 127.0.0.1 --web-port 8080
 ```
 
-或启动后在 Web 界面右上角「设置」中在线填写（密钥掩码显示，保存后写入 `data/llm_config.env` 并立即生效）。
+没有 Embedding 配置也能运行（自动降级为稀疏检索）。`chromadb` 与 `jieba` 为可选增强：未安装时检索自动降级为内置存储 / 纯稀疏模式。
 
-没有 Embedding 配置也能运行（自动降级为稀疏检索）；没有 LLM key 时进入演示降级模式，会明确提示而不是编造答案。
-
-### 3. 启动
-
-```bash
-python app.py
-# Web UI: http://127.0.0.1:8000 （按 Ctrl+C 退出）
-```
-
-`app.py` 参数：
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `--web-host` | `127.0.0.1` | 监听地址 |
-| `--web-port` | `8000` | 监听端口 |
-| `--config-file` | - | 从 KEY=VALUE 文件加载模型配置 |
-
-部署形态为单进程：FastAPI 直接托管 `web/dist` 构建产物，线上不需要 Node。Chroma 与任务调度共用本地状态，因此固定单 worker。
+部署形态为单进程：FastAPI 直接托管 `web/dist` 构建产物，线上不需要 Node；Chroma 与任务调度共用本地状态，固定单 worker。开发时前后端分别启动的方式见 [前端说明](web/README.md)，Docker 构建后同样只运行 Web 服务，持久化目录为 `/app/data`。
 
 ## Web 界面
 
-- **左侧会话列表**：新建 / 切换 / 删除研究会话，刷新后自动恢复上次会话。
-- **查询栏**：输入研究主题开始调研；上传 PDF/MD/TXT（或从论文库选择）后自动进入单篇论文问答；可设置检索数量 `top_k`、是否重建所选论文索引。
-- **调研进行中**：进度日志实时滚动，各子主题以卡片形式展示状态（排队 / 运行中 / 完成 / 失败 / 取消）；查询栏自动切换为「指令模式」，可直接发送动态指令。
-- **结果区**：Markdown 报告渲染，点击 `[Sx]` 引用高亮右侧对应来源；支持下载报告 Markdown。
-- **右侧边栏**：来源证据、每篇论文的取证状态、工具调用轨迹（按需展开）、反思结论、待确认长期记忆候选（勾选保存）。
-- **中断恢复**：检测到未完成的调研时显示「继续执行」提示条，保留已完成成果并只续跑未完成主题。
-- **设置对话框**：在线修改 LLM / Embedding 模型与密钥、最大研究轮次、每轮论文数；健康条展示后端能力状态（LLM 可用性、tool calling、向量后端等）。
+- **调研方向**：输入课题开始调研，运行中可追加、取消子主题；重新打开页面可查看进度，服务中断后可选择继续执行。
+- **研读论文**：「上传论文」支持 PDF、MD、TXT；「已有论文」可复用论文库中的文件。选中后问题围绕该论文回答，移除选择后可调研其他方向。
+- **检索控制**：「本次检索设置」可覆盖本轮检索数量；选中论文后可勾选开始前重建索引。默认检索数量在「研究设置」保存。
+- **留存成果**：查看引用、下载 Markdown 结果、主动保存研究笔记；历史会话会恢复所选论文，方便继续追问。
 
 ## 三种工作模式
 
@@ -142,10 +119,10 @@ LLM 生成检索计划与查询批次 → 调度器拆分子主题并发执行�
 |---|---|---|
 | 短期记忆 | JSON checkpoint（`data/checkpoints/`） | 完整会话状态，支撑多轮续跑与中断恢复 |
 | 对话记账 | JSON（`data/conversations/`） | 每轮 query + 完整结果，供 Web 历史展示 |
-| 长期记忆 | SQLite（`data/memory.db`） | 用户确认后的记忆条目，按向量 + 关键词 + 时效加权召回 |
+| 长期记忆 | SQLite（`data/app.db`） | 已保存的记忆条目，按向量 + 关键词 + 时效加权召回 |
 | 论文笔记 | SQLite | 每篇精读论文的结构化笔记（问题/方法/实验/总结） |
 | 上下文压缩 | LLM | 中段消息摘要压缩，保住初始问题与近期对话 |
-| 输出偏好 | 规则识别 | 从本轮 query 识别语言 / 格式 / 语气要求 |
+| 输出偏好 | 研究设置 | Web「研究设置」保存语言 / 格式 / 风格 / 深度默认值，本轮要求可临时覆盖 |
 
 ## 检索与引用
 
@@ -221,16 +198,18 @@ python -m mcp_server.server --rebuild-index      # 重建论文库索引后启�
 ├── rag/                      # 文档解析分块、检索编排、Chroma / 稀疏后端、分词
 ├── memory/                   # 短期 checkpoint、长期 SQLite、压缩、偏好、笔记
 ├── mcp_server/               # MCP 扩展（对外暴露论文库）
-├── skills/                   # 轻量 YAML 工作流定义（文献综述 / 报告生成）
+├── storage/                  # SQLite 存储层（database / repositories / outbox / worker）
+├── scripts/                  # 存储迁移与真实调研验收脚本
+├── docs/                     # 设计与调研文档
 ├── web/                      # React 前端（Vite + Tailwind），详见 web/README.md
-└── data/                     # 运行时数据
-    ├── llm_config.env        # 模型配置（模板已随仓库提供）
-    ├── papers/               # 本地论文库
-    ├── vector_store/         # 检索索引（corpus / files / sessions）
+└── data/                     # 运行时数据（已被 .gitignore 忽略，demo.md 报告除外）
+    ├── llm_config.env        # 模型配置（模板 llm_config.env.example 已随仓库提供）
+    ├── app.db                # 正式 SQLite 数据库（会话 / 记忆 / 论文笔记）
+    ├── user_files/           # 用户文件（papers/ 上传论文库，downloads/ 下载全文）
+    ├── chroma/               # 向量索引（可重建，SQL 是事实源）
     ├── checkpoints/          # 会话 checkpoint
     ├── conversations/        # 对话记账
-    ├── reports/              # 生成的报告（demo.md 为真实生成示例）
-    └── memory.db             # 长期记忆
+    └── reports/              # 生成的报告（demo.md 为真实生成示例）
 ```
 
 

@@ -315,16 +315,24 @@ def get_settings() -> dict[str, Any]:
     load_default_config_file()
     data_dir = PROJECT_ROOT / "data"
     vector_root = data_dir / "vector_store"
-    downloads_dir = data_dir / "downloads"
+    chroma_dir = data_dir / "chroma"
+    user_files_dir = data_dir / "user_files"
+    papers_dir = user_files_dir / "papers"
+    downloads_dir = user_files_dir / "downloads"
     return {
         "project_root": PROJECT_ROOT,
         "data_dir": data_dir,
-        "papers_dir": data_dir / "papers",
+        "papers_dir": papers_dir,
         "downloads_dir": downloads_dir,
+        "user_files_dir": user_files_dir,
+        "benchmark_papers_dir": data_dir / "archive" / "benchmark" / "papers",
+        "evaluation_archive_dir": data_dir / "archive" / "evaluation",
         "vector_store_dir": vector_root,
         "vector_store_corpus_dir": vector_root / "corpus",
         "vector_store_files_dir": vector_root / "files",
-        "sqlite_db_path": data_dir / "memory.db",
+        "chroma_dir": chroma_dir,
+        "sqlite_db_path": data_dir / "app.db",
+        "storage_db_path": Path(os.getenv("RESEARCH_AGENT_STORAGE_DB") or (data_dir / "app.db")),
         "reports_dir": data_dir / "reports",
         "default_top_k": int(os.getenv("RESEARCH_AGENT_DEFAULT_TOP_K") or 4),
         "chunk_size": 1000,
@@ -338,6 +346,8 @@ def get_settings() -> dict[str, Any]:
         "vector_backend": (os.getenv("RESEARCH_AGENT_VECTOR_BACKEND") or "auto").strip().lower(),
         "proxy": (os.getenv("RESEARCH_AGENT_PROXY") or "").strip(),
         "request_timeout": float(os.getenv("RESEARCH_AGENT_REQUEST_TIMEOUT") or DEFAULT_REQUEST_TIMEOUT),
+        "outbox_poll_interval": float(os.getenv("RESEARCH_AGENT_OUTBOX_POLL_INTERVAL") or 0.5),
+        "outbox_stale_after": float(os.getenv("RESEARCH_AGENT_OUTBOX_STALE_AFTER") or 300),
         "llm_compression_enabled": (os.getenv("RESEARCH_AGENT_LLM_COMPRESSION") or "1").strip() not in {"0", "false", "no"},
         "tool_calling_enabled": (os.getenv("RESEARCH_AGENT_TOOL_CALLING") or "1").strip() not in {"0", "false", "no"},
         "max_research_rounds": int(os.getenv("RESEARCH_AGENT_MAX_RESEARCH_ROUNDS") or 2),
@@ -348,11 +358,13 @@ def get_settings() -> dict[str, Any]:
 def ensure_directories(settings: dict[str, Any]) -> None:
     directories = [
         settings["data_dir"],
+        settings["user_files_dir"],
         settings["papers_dir"],
         settings["downloads_dir"],
         settings["vector_store_dir"],
         settings["vector_store_corpus_dir"],
         settings["vector_store_files_dir"],
+        settings["chroma_dir"],
         settings["reports_dir"],
     ]
     for directory in directories:

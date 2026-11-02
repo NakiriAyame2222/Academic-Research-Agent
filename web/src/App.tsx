@@ -6,6 +6,7 @@ import {
   createSession,
   getConversation,
   getCurrentResearch,
+  getHealth,
   resumeResearch,
   sendResearchCommand,
   submitResearch,
@@ -38,6 +39,7 @@ export default function App() {
   const [showNote, setShowNote] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [interruptedState, setInterruptedState] = useState<{ canResume: boolean; topicsCount: number } | null>(null);
+  const [health, setHealth] = useState<import("./api/client").HealthInfo | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -53,6 +55,14 @@ export default function App() {
         });
       }
     } catch {}
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => getHealth().then((value) => { if (active) setHealth(value); }).catch(() => undefined);
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => { active = false; window.clearInterval(timer); };
   }, []);
 
   async function handleSubmit(query: string, filePath: string | null) {
@@ -242,6 +252,11 @@ export default function App() {
           >
             ⚙ 研究设置
           </button>
+          {health && !health.chroma_ready && (
+            <span className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-700" title="SQL 已保存，向量任务等待 Chroma/embedding">
+              向量检索未完成 · pending {health.outbox_pending}
+            </span>
+          )}
         </div>
       </header>
 

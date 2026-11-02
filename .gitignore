@@ -21,6 +21,20 @@ data/llm_config.env
 data/vector_store/
 data/downloads/
 data/memory.db
+data/app.db*
+data/user_files/
+data/chroma/
+data/checkpoints/
+data/conversations/
+data/papers/
+data/archive/
+data/migration/
+data/deep-research-live-receipt.json
 
-# Optional local reports
-# data/reports/
+# Generated reports (keep only the demo report referenced by README)
+data/reports/*
+!data/reports/demo.md
+
+# Tests (kept locally, not published to GitHub)
+tests/
+.opencode/

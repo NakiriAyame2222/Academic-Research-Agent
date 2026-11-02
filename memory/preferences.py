@@ -1,3 +1,4 @@
+"""本轮明确输出要求；持久偏好仅由设置接口修改。"""
 from __future__ import annotations
 
 import re

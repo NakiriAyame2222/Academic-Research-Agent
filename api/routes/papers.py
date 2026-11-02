@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile
@@ -9,6 +10,9 @@ from fastapi import APIRouter, HTTPException, UploadFile
 from agent.intent import SUPPORTED_PAPER_EXTENSIONS
 from api.schemas import PaperInfo
 from config import get_settings
+from memory.short_term import storage_path
+from storage import Database
+from rag.loader import prepare_documents
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
@@ -70,7 +74,31 @@ async def upload_paper(file: UploadFile) -> dict:
         raise
     finally:
         await file.close()
-    return {"file_path": str(safe_path), "size_bytes": written, "file_name": safe_path.name}
+    digest = hashlib.sha256(safe_path.read_bytes()).hexdigest()
+    relative_path = str(safe_path.resolve().relative_to(Path(settings["data_dir"]).resolve())).replace("\\", "/")
+    with Database(storage_path()) as db:
+        with db.transaction(immediate=True):
+            document = db.repositories.documents.upsert(
+                digest,
+                source_uri=relative_path,
+                local_path=relative_path,
+                title=safe_path.stem,
+                mime_type=file.content_type or "application/octet-stream",
+                usage_type="user",
+                keep_local=True,
+                metadata={"filename": safe_path.name},
+            )
+            for chunk in prepare_documents(file_path=str(safe_path), chunk_size=settings["chunk_size"], chunk_overlap=settings["chunk_overlap"]):
+                metadata = dict(chunk.get("metadata") or {})
+                db.repositories.document_chunks.upsert(
+                    document["id"],
+                    int(metadata.get("chunk_index") or 0),
+                    str(chunk.get("page_content") or ""),
+                    page=metadata.get("page"),
+                    section_title=str(metadata.get("section_title") or ""),
+                    metadata=metadata,
+                )
+    return {"document_id": document["id"], "file_path": str(safe_path), "size_bytes": written, "file_name": safe_path.name, "vector_status": "pending"}
 
 
 @router.get("", response_model=list[PaperInfo])
@@ -83,12 +111,30 @@ def list_papers() -> list[PaperInfo]:
     results: list[PaperInfo] = []
     for path in sorted(papers_dir.rglob("*")):
         if path.is_file() and path.suffix.lower() in SUPPORTED_PAPER_EXTENSIONS:
+            relative_path = str(path.resolve().relative_to(Path(settings["data_dir"]).resolve())).replace("\\", "/")
+            with Database(storage_path()) as db:
+                document = db.repositories.documents.get_by_sha256(hashlib.sha256(path.read_bytes()).hexdigest())
             results.append(
                 PaperInfo(
+                    document_id=str((document or {}).get("id", "")),
                     file_name=path.name,
                     file_path=str(path),
                     size_bytes=path.stat().st_size,
                     suffix=path.suffix.lower(),
+                    file_url=f"/api/papers/file?path={relative_path}",
                 )
             )
     return results
+
+
+@router.get("/file")
+def download_paper(path: str):
+    """Serve only files below the formal user-files root."""
+    from fastapi.responses import FileResponse
+
+    settings = get_settings()
+    root = Path(settings["user_files_dir"]).resolve()
+    resolved = (Path(settings["data_dir"]) / path).resolve()
+    if root not in resolved.parents or not resolved.is_file() or resolved.suffix.lower() not in SUPPORTED_PAPER_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="paper not found")
+    return FileResponse(resolved, filename=resolved.name)

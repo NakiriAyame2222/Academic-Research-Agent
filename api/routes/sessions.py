@@ -1,7 +1,6 @@
 """会话管理：列出 / 详情 / 删除（扫 data/checkpoints/）+ 多轮研究 + 记忆确认 + 报告下载。"""
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -26,7 +25,7 @@ from api.schemas import (
 from api.serialize import serialize_state
 from api.conversation import read_conversation
 from memory.long_term import save_memory_item
-from memory.short_term import CHECKPOINT_DIR, load_checkpoint
+from memory.short_term import CHECKPOINT_DIR, load_checkpoint, storage_path
 
 router = APIRouter(prefix="/api", tags=["sessions"])
 
@@ -40,29 +39,55 @@ def create_session() -> dict:
     """创建会话，返回新的 session_id。研究任务挂在 /sessions/{sid}/research 下。"""
     from uuid import uuid4
 
-    return {"session_id": uuid4().hex}
+    session_id = uuid4().hex
+    from storage import Database
+    with Database(storage_path()) as db:
+        db.repositories.sessions.create(session_id=session_id)
+    return {"session_id": session_id}
 
 
 @router.get("/sessions", response_model=list[SessionSummary])
 def list_sessions() -> list[SessionSummary]:
-    """列出全部会话（扫 data/checkpoints/*.json）。"""
-    if not CHECKPOINT_DIR.exists():
-        return []
+    """列出正式数据库中的会话，兼容旧测试手工写入的 checkpoint JSON。"""
+    from storage import Database
+    with Database(storage_path()) as db:
+        rows = db.repositories.sessions.list()
+        report_flags = {str(row["id"]): bool(db.repositories.reports.list(str(row["id"]))) for row in rows}
+        message_counts = {str(row["id"]): len(db.repositories.session_messages.list(str(row["id"]))) for row in rows}
     summaries: list[SessionSummary] = []
-    for path in sorted(CHECKPOINT_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    seen: set[str] = set()
+    for row in rows:
+        state = {}
         try:
-            state = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
+            import json
+            state = json.loads(row.get("state_json") or "{}")
+        except (TypeError, ValueError):
+            pass
+        session_id = str(row["id"])
+        seen.add(session_id)
         summaries.append(
             SessionSummary(
-                session_id=path.stem,
-                topic=str(state.get("topic") or state.get("initial_user_question") or "")[:80],
-                has_report=bool(state.get("report_path")),
-                updated_at=_mtime(path),
-                messages_count=len(state.get("messages") or []),
+                session_id=session_id,
+                topic=str(row.get("topic") or state.get("topic") or state.get("initial_user_question") or "")[:80],
+                has_report=bool(state.get("report_path")) or report_flags.get(session_id, False),
+                updated_at=str(row.get("updated_at") or ""),
+                messages_count=message_counts.get(session_id, 0) or len(state.get("messages") or []),
             )
         )
+    if CHECKPOINT_DIR.exists():
+        import json
+        for path in CHECKPOINT_DIR.glob("*.json"):
+            if path.stem in seen:
+                continue
+            try:
+                state = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            summaries.append(SessionSummary(session_id=path.stem,
+                topic=str(state.get("topic") or state.get("initial_user_question") or "")[:80],
+                has_report=bool(state.get("report_path")), updated_at=_mtime(path),
+                messages_count=len(state.get("messages") or [])))
+    summaries.sort(key=lambda item: item.updated_at, reverse=True)
     return summaries
 
 
@@ -81,17 +106,22 @@ def session_detail(session_id: str) -> SessionDetail:
 
 @router.delete("/sessions/{session_id}")
 def delete_session(session_id: str) -> dict:
-    """删除会话 checkpoint。sid 经路径参数进入，glob 通配符天然被文件名匹配排除。"""
+    """删除会话的 SQL 状态、消息、报告、产物和文档链接；文档本体保留。"""
     if "/" in session_id or "\\" in session_id or ".." in session_id:
         raise HTTPException(status_code=400, detail="invalid session id")
-    path = CHECKPOINT_DIR / f"{session_id}.json"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="session not found")
-    path.unlink()
-    # 同步删掉 Web 层的对话日志
+    from storage import Database
+    with Database(storage_path()) as db:
+        exists = db.repositories.sessions.get(session_id) is not None
+        legacy_path = CHECKPOINT_DIR / f"{session_id}.json"
+        if not exists and not legacy_path.exists():
+            raise HTTPException(status_code=404, detail="session not found")
+        if exists:
+            db.repositories.sessions.delete(session_id)
+    if legacy_path.exists():
+        legacy_path.unlink()
+    # Remove only legacy JSON; all durable application rows were removed above.
     try:
         from api.conversation import CONVERSATION_DIR
-
         (CONVERSATION_DIR / f"{session_id}.json").unlink(missing_ok=True)
     except Exception:
         pass
@@ -260,7 +290,20 @@ def download_report(session_id: str) -> FileResponse:
     state = load_checkpoint(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="session not found")
-    path = Path(str(state.get("report_path") or ""))
+    raw_path = str(state.get("report_path") or "")
+    path = Path(raw_path) if raw_path else Path()
+    if not raw_path:
+        from storage import Database
+        import json
+        with Database(storage_path()) as db:
+            reports = db.repositories.reports.list(session_id)
+        if reports:
+            try:
+                metadata = json.loads(reports[-1].get("metadata_json") or "{}")
+            except (TypeError, ValueError):
+                metadata = {}
+            raw_path = str(metadata.get("path") or "")
+            path = Path(raw_path) if raw_path else Path()
     if not path.is_absolute():
         raise HTTPException(status_code=404, detail="no report for this session")
 

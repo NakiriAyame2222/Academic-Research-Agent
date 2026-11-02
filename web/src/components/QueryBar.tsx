@@ -166,11 +166,20 @@ export function QueryBar({
           >
             <option value="">请选择论文…</option>
             {papers.map((paper) => (
-              <option key={paper.file_path} value={paper.file_path}>
-                {paper.file_name}（{Math.max(1, Math.round(paper.size_bytes / 1024))} KB）
-              </option>
+                <option key={paper.file_path} value={paper.file_path}>
+                  {paper.file_name}（{Math.max(1, Math.round(paper.size_bytes / 1024))} KB）
+                </option>
             ))}
           </select>
+          {papers.length > 0 && (
+            <div className="flex flex-wrap gap-2 text-xs">
+              {papers.map((paper) => paper.file_url && (
+                <a key={`${paper.file_path}-view`} href={paper.file_url} target="_blank" rel="noreferrer" className="text-accent underline underline-offset-2">
+                  查看 {paper.file_name}
+                </a>
+              ))}
+            </div>
+          )}
           {!loadingPapers && !libraryError && !papers.length && <p className="text-xs text-ink-muted">论文库为空，请先上传 PDF、MD 或 TXT 文件。</p>}
           {libraryError && <p role="alert" className="text-xs text-danger">{libraryError}</p>}
         </div>

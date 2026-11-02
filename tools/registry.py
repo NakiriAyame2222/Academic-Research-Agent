@@ -217,7 +217,7 @@ TOPIC_RESEARCH_TOOLS: list[ToolSpec] = [
         parameters={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "英文检索关键词，不要直接用中文原句"},
+                "query": {"type": "string", "description": "使用英文检索关键词，不要直接用中文原句"},
                 "max_results": {"type": "integer", "description": "本次返回条数，1-10", "default": 5},
                 "label": {"type": "string", "description": "这一轮的角度标签，如 broad/survey/method"},
             },

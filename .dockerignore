@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+node_modules/
+web/node_modules/
+web/dist/
+data/
+note/
+interview_md/
+tests/
+problems.md
+cong.txt
+Dockerfile
+.dockerignore
+.claude/
+D:\TMP\

@@ -16,7 +16,6 @@ from agent.state import build_initial_state
 from langgraph.graph import END, START, StateGraph
 
 # 图结构：planner -> evidence_agent -> researcher -> reflect -> (回 evidence_agent | writer)
-# 改动前是五条固定 add_edge 的线性链，没有条件边也没有反思/重试循环。
 NODE_SEQUENCE: list[tuple[str, Callable[[dict[str, Any]], dict[str, Any]]]] = [
     ("planner", planner_agent),
     ("evidence_agent", evidence_agent),

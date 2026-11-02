@@ -1,52 +1,43 @@
+"""Formal Chroma adapter.
+
+SQLite owns text and metadata.  Chroma contains only vectors, stable SQL IDs,
+and scalar metadata, so a vector result is always followed by a SQL lookup.
+"""
 from __future__ import annotations
 
-import hashlib
 import json
-import re
 from pathlib import Path
 from typing import Any
 
-from rag.sparse import (
-    DENSE_WEIGHT,
-    SPARSE_WEIGHT,
-    build_query_sparse_vector,
-    build_sparse_index,
-    sparse_cosine_similarity,
-)
-
-try:  # pragma: no cover - 可选依赖
+try:  # pragma: no cover - optional dependency
     import chromadb
     from chromadb.config import Settings as ChromaSettings
 except ImportError:  # pragma: no cover
     chromadb = None
     ChromaSettings = None
 
+from storage.database import Database
+from storage.outbox import MEMORY_COLLECTION, RESEARCH_COLLECTION
+
 
 class ChromaUnavailable(RuntimeError):
-    """chromadb 不可用或无法为该目录初始化集合。"""
+    pass
 
 
 def chroma_available() -> bool:
     return chromadb is not None
 
 
-def _collection_name(persist_dir: str) -> str:
-    digest = hashlib.md5(str(persist_dir).encode("utf-8")).hexdigest()[:12]
-    stem = re.sub(r"[^a-zA-Z0-9_-]+", "_", Path(persist_dir).name).strip("_") or "corpus"
-    return f"{stem[:40]}_{digest}"
-
-
 def _flatten_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """Chroma 只接受标量 metadata，复杂值序列化为字符串。"""
-    flattened: dict[str, Any] = {}
+    result: dict[str, Any] = {}
     for key, value in metadata.items():
         if value is None:
             continue
         if isinstance(value, (str, int, float, bool)):
-            flattened[key] = value
+            result[str(key)] = value
         else:
-            flattened[key] = json.dumps(value, ensure_ascii=False)
-    return flattened
+            result[str(key)] = json.dumps(value, ensure_ascii=False)
+    return result
 
 
 class ChromaRetriever:
@@ -61,150 +52,115 @@ class ChromaRetriever:
 class ChromaVectorStore:
     backend = "chroma"
 
-    def __init__(
-        self,
-        documents: list[dict[str, Any]],
-        collection: Any,
-        sparse_vectors: list[dict[str, float]] | None = None,
-        idf: dict[str, float] | None = None,
-        persist_dir: str | None = None,
-    ) -> None:
-        self.documents = documents
-        self.collection = collection
-        self.sparse_vectors = sparse_vectors or []
-        self.idf = idf or {}
-        self.persist_dir = persist_dir
-        # embeddings 属性仅为与 SimpleVectorStore 接口对齐，Chroma 侧不在内存里保留向量
-        self.embeddings: list[list[float]] = []
+    def __init__(self, client: Any, db: Database | None = None, db_path: str | Path | None = None, documents: list[dict[str, Any]] | None = None, scope: str | None = None) -> None:
+        self.client = client
+        self.db = db
+        self.db_path = str(db_path) if db_path is not None else None
+        self.documents = documents or []  # compatibility view; not a persistence source
+        self.scope = scope
+        self.collection = client.get_or_create_collection(name=RESEARCH_COLLECTION, metadata={"hnsw:space": "cosine"})
+        self.memory_collection = client.get_or_create_collection(name=MEMORY_COLLECTION, metadata={"hnsw:space": "cosine"})
+        self.ready = True
 
     @classmethod
-    def create(
-        cls,
-        documents: list[dict[str, Any]],
-        persist_dir: str,
-        embeddings: list[list[float]],
-        sparse_vectors: list[dict[str, float]] | None = None,
-        idf: dict[str, float] | None = None,
-    ) -> "ChromaVectorStore":
+    def open(cls, persist_dir: str | Path, *, db: Database | None = None, db_path: str | Path | None = None, scope: str | None = None) -> "ChromaVectorStore":
         if chromadb is None:
             raise ChromaUnavailable("chromadb is not installed")
-        if not embeddings or len(embeddings) != len(documents):
-            raise ChromaUnavailable("chroma backend requires one embedding per document")
-
-        if sparse_vectors is None or idf is None:
-            sparse_vectors, idf = build_sparse_index(documents)
-
+        path = Path(persist_dir)
+        path.mkdir(parents=True, exist_ok=True)
         try:
-            client = chromadb.PersistentClient(
-                path=str(Path(persist_dir) / "chroma"),
-                settings=ChromaSettings(anonymized_telemetry=False, allow_reset=True),
-            )
-            name = _collection_name(persist_dir)
-            try:
-                client.delete_collection(name)
-            except Exception:
-                pass
-            collection = client.create_collection(name=name, metadata={"hnsw:space": "cosine"})
-            collection.add(
-                ids=[str(index) for index in range(len(documents))],
-                embeddings=embeddings,
-                documents=[doc.get("page_content", "") for doc in documents],
-                metadatas=[_flatten_metadata(doc.get("metadata", {})) for doc in documents],
-            )
-        except ChromaUnavailable:
-            raise
-        except Exception as exc:  # pragma: no cover - 依赖环境
-            raise ChromaUnavailable(f"failed to initialize chroma collection: {exc}") from exc
-
-        return cls(documents, collection, sparse_vectors=sparse_vectors, idf=idf, persist_dir=str(persist_dir))
-
-    @classmethod
-    def load(
-        cls,
-        documents: list[dict[str, Any]],
-        persist_dir: str,
-        sparse_vectors: list[dict[str, float]] | None = None,
-        idf: dict[str, float] | None = None,
-    ) -> "ChromaVectorStore":
-        if chromadb is None:
-            raise ChromaUnavailable("chromadb is not installed")
-        try:
-            client = chromadb.PersistentClient(
-                path=str(Path(persist_dir) / "chroma"),
-                settings=ChromaSettings(anonymized_telemetry=False, allow_reset=True),
-            )
-            collection = client.get_collection(name=_collection_name(persist_dir))
-            if collection.count() != len(documents):
-                raise ChromaUnavailable("chroma collection is out of sync with persisted documents")
-        except ChromaUnavailable:
-            raise
+            kwargs: dict[str, Any] = {"path": str(path)}
+            if ChromaSettings is not None:
+                kwargs["settings"] = ChromaSettings(anonymized_telemetry=False, allow_reset=True)
+            client = chromadb.PersistentClient(**kwargs)
+            return cls(client, db=db, db_path=db_path, scope=scope)
         except Exception as exc:
-            raise ChromaUnavailable(f"failed to load chroma collection: {exc}") from exc
-        return cls(documents, collection, sparse_vectors=sparse_vectors, idf=idf, persist_dir=str(persist_dir))
+            raise ChromaUnavailable(f"failed to initialize Chroma: {exc}") from exc
+
+    @classmethod
+    def create(cls, documents: list[dict[str, Any]], persist_dir: str, embeddings: list[list[float]], sparse_vectors: Any = None, idf: Any = None, *, db: Database | None = None, db_path: str | Path | None = None) -> "ChromaVectorStore":
+        if not embeddings or len(embeddings) != len(documents):
+            raise ChromaUnavailable("one embedding is required per document")
+        store = cls.open(persist_dir, db=db, db_path=db_path)
+        ids: list[str] = []
+        metadatas: list[dict[str, Any]] = []
+        for index, document in enumerate(documents):
+            metadata = dict(document.get("metadata") or {})
+            ids.append(str(metadata.get("chunk_id") or metadata.get("memory_id") or f"legacy-{index}"))
+            metadatas.append(_flatten_metadata(metadata))
+        store.collection.upsert(ids=ids, embeddings=embeddings, metadatas=metadatas)
+        return store
+
+    @classmethod
+    def load(cls, documents: list[dict[str, Any]] | None, persist_dir: str, sparse_vectors: Any = None, idf: Any = None, *, db: Database | None = None, db_path: str | Path | None = None) -> "ChromaVectorStore":
+        return cls.open(persist_dir, db=db, db_path=db_path)
+
+    def _collection_for(self, entity_type: str) -> Any:
+        return self.memory_collection if entity_type == "memory" else self.collection
+
+    def upsert(self, entity_type: str, entity_id: str, embedding: list[float], metadata: dict[str, Any]) -> None:
+        self._collection_for(entity_type).upsert(ids=[str(entity_id)], embeddings=[embedding], metadatas=[_flatten_metadata(metadata)])
+
+    def delete(self, entity_type: str, entity_id: str) -> None:
+        self._collection_for(entity_type).delete(ids=[str(entity_id)])
 
     def as_retriever(self, search_kwargs: dict[str, Any] | None = None) -> ChromaRetriever:
-        search_kwargs = search_kwargs or {}
-        return ChromaRetriever(self, top_k=int(search_kwargs.get("k", 4)))
+        return ChromaRetriever(self, int((search_kwargs or {}).get("k", 4)))
+
+    def _sql(self) -> Database:
+        if self.db is not None:
+            return self.db
+        if not self.db_path:
+            raise ChromaUnavailable("SQL database is required for Chroma retrieval")
+        return Database(self.db_path)
+
+    def _fetch_chunks(self, ids: list[str]) -> list[dict[str, Any]]:
+        if not ids:
+            return []
+        db = self._sql()
+        placeholders = ",".join("?" for _ in ids)
+        rows = db.execute(f"SELECT * FROM document_chunks WHERE id IN ({placeholders})", tuple(ids)).fetchall()
+        by_id = {str(row["id"]): dict(row) for row in rows}
+        result: list[dict[str, Any]] = []
+        for identifier in ids:
+            row = by_id.get(str(identifier))
+            if not row:
+                continue
+            metadata = json.loads(row.get("metadata_json") or "{}")
+            metadata.update({"chunk_id": row["id"], "document_id": row["document_id"], "chunk_index": row["chunk_index"]})
+            result.append({"page_content": row["content"], "metadata": metadata})
+        return result
 
     def search(self, query: str, top_k: int = 4) -> list[dict[str, Any]]:
-        if not self.documents:
-            return []
-
         from rag import retriever as retriever_module
 
-        candidate_pool = max(top_k * 5, 20)
-        dense_scores: dict[int, float] = {}
+        embedder = retriever_module.get_embedder()
+        if embedder is None or self.collection.count() == 0:
+            return []
+        try:
+            kwargs: dict[str, Any] = {"query_embeddings": [embedder.embed_query(query)], "n_results": min(max(top_k, 1), self.collection.count()), "include": ["distances"]}
+            if self.scope:
+                kwargs["where"] = {"index_scope": self.scope}
+            response = self.collection.query(**kwargs)
+            ids = list((response.get("ids") or [[]])[0])
+        except Exception:
+            return []
+        return self._fetch_chunks([str(identifier) for identifier in ids])[:top_k]
+
+    def search_memories(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+        from rag import retriever as retriever_module
 
         embedder = retriever_module.get_embedder()
-        if embedder is not None:
-            try:
-                query_embedding = embedder.embed_query(query)
-                result = self.collection.query(
-                    query_embeddings=[query_embedding],
-                    n_results=min(candidate_pool, len(self.documents)),
-                    include=["distances"],
-                )
-                ids = (result.get("ids") or [[]])[0]
-                distances = (result.get("distances") or [[]])[0]
-                for raw_id, distance in zip(ids, distances):
-                    try:
-                        index = int(raw_id)
-                    except (TypeError, ValueError):
-                        continue
-                    # cosine space: distance = 1 - similarity
-                    dense_scores[index] = 1.0 - float(distance)
-            except Exception:
-                dense_scores = {}
-
-        query_sparse = build_query_sparse_vector(query, self.idf)
-        sparse_scores: dict[int, float] = {}
-        for index in range(len(self.documents)):
-            if index >= len(self.sparse_vectors):
-                break
-            score = sparse_cosine_similarity(query_sparse, self.sparse_vectors[index])
-            if score > 0:
-                sparse_scores[index] = score
-
-        if dense_scores:
-            combined = {
-                index: dense_scores.get(index, 0.0) * DENSE_WEIGHT + sparse_scores.get(index, 0.0) * SPARSE_WEIGHT
-                for index in set(dense_scores) | set(sparse_scores)
-            }
-        else:
-            combined = dict(sparse_scores)
-
-        ranked = sorted((score, index) for index, score in combined.items() if score > 0)
-        ranked.reverse()
-        if not ranked:
-            return self.documents[:top_k]
-        return [self.documents[index] for _, index in ranked[:top_k]]
+        if embedder is None or self.memory_collection.count() == 0:
+            return []
+        response = self.memory_collection.query(query_embeddings=[embedder.embed_query(query)], n_results=min(top_k, self.memory_collection.count()), include=["distances"])
+        ids = [str(value) for value in list((response.get("ids") or [[]])[0])]
+        db = self._sql()
+        placeholders = ",".join("?" for _ in ids)
+        rows = db.execute(f"SELECT * FROM memories WHERE id IN ({placeholders})", tuple(ids)).fetchall() if ids else []
+        by_id = {str(row["id"]): dict(row) for row in rows}
+        return [{"page_content": by_id[item]["content"], "metadata": {"memory_id": item, **json.loads(by_id[item].get("metadata_json") or "{}")}} for item in ids if item in by_id]
 
     def persist(self) -> None:
-        """Chroma 自己持久化向量；这里只落 documents / 稀疏索引，供重载与降级共用。"""
-        if not self.persist_dir:
-            return
-        persist_path = Path(self.persist_dir)
-        persist_path.mkdir(parents=True, exist_ok=True)
-        (persist_path / "documents.json").write_text(json.dumps(self.documents, ensure_ascii=False, indent=2), encoding="utf-8")
-        (persist_path / "sparse_vectors.json").write_text(json.dumps(self.sparse_vectors, ensure_ascii=False), encoding="utf-8")
-        (persist_path / "idf.json").write_text(json.dumps(self.idf, ensure_ascii=False), encoding="utf-8")
+        # PersistentClient flushes its own storage; SQL/outbox are persisted separately.
+        return None

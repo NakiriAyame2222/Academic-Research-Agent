@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from memory.compression import attach_memory_summary, trim_messages
 
@@ -31,30 +30,73 @@ def compress_state_for_checkpoint(state: dict[str, Any]) -> dict[str, Any]:
     return compressed
 
 
-def save_checkpoint(state: dict[str, Any], session_id: str | None = None) -> None:
-    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    current_session_id = session_id or state.get("session_id") or state.get("user_id", "default")
-    checkpoint_path = CHECKPOINT_DIR / f"{current_session_id}.json"
-    snapshot = compress_state_for_checkpoint(state)
-    serialized = json.dumps(snapshot, ensure_ascii=False, indent=2)
-
-    tmp_path = CHECKPOINT_DIR / f".{current_session_id}.json.tmp.{uuid4().hex}"
+def storage_path() -> Path:
+    """Resolve the formal DB, preserving legacy tests' checkpoint monkeypatches."""
+    explicit = os.getenv("RESEARCH_AGENT_STORAGE_DB", "").strip()
+    if explicit:
+        return Path(explicit)
     try:
-        tmp_path.write_text(serialized, encoding="utf-8")
-        os.replace(tmp_path, checkpoint_path)
-    finally:
-        if tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
+        from config import get_settings
+
+        configured = Path(get_settings().get("storage_db_path") or get_settings()["sqlite_db_path"])
+        default_dir = Path(__file__).resolve().parent.parent / "data" / "checkpoints"
+        if CHECKPOINT_DIR != default_dir:
+            return CHECKPOINT_DIR.parent / "app.db"
+        return configured
+    except Exception:
+        return CHECKPOINT_DIR.parent / "app.db"
+
+
+def _database():
+    from storage import Database
+
+    return Database(storage_path())
+
+
+def _state_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    try:
+        value = json.loads(row.get("state_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
+def save_checkpoint(state: dict[str, Any], session_id: str | None = None) -> None:
+    current_session_id = session_id or state.get("session_id") or state.get("user_id", "default")
+    snapshot = compress_state_for_checkpoint(state)
+    user_id = str(snapshot.get("user_id") or "default")
+    topic = str(snapshot.get("topic") or snapshot.get("initial_user_question") or "")
+    status = str(snapshot.get("status") or snapshot.get("phase") or "active")
+    with _database() as db:
+        existing = db.repositories.sessions.get(str(current_session_id))
+        if existing is None:
+            db.repositories.sessions.create(
+                title=topic[:120], status=status, session_id=str(current_session_id),
+                user_id=user_id, topic=topic, state=snapshot,
+            )
+        else:
+            db.repositories.sessions.update(
+                str(current_session_id), title=topic[:120], status=status,
+                user_id=user_id, topic=topic, state=snapshot,
+            )
 
 
 def load_checkpoint(session_id: str, mark_interrupted: bool = False) -> dict[str, Any] | None:
-    checkpoint_path = CHECKPOINT_DIR / f"{session_id}.json"
-    if not checkpoint_path.exists():
+    with _database() as db:
+        row = db.repositories.sessions.get(session_id)
+    state = _state_from_row(row) if row else {}
+    # Compatibility for old fixtures/tests and pre-storage installations. New
+    # writes never create this file.
+    if not state:
+        checkpoint_path = CHECKPOINT_DIR / f"{session_id}.json"
+        if not checkpoint_path.exists():
+            return None
+        try:
+            state = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+    if not isinstance(state, dict):
         return None
-    state = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     state.setdefault("recent_messages", trim_messages(list(state.get("messages", []))))
     state.setdefault("initial_user_question", "")
     state.setdefault("conversation_summary_middle", "")

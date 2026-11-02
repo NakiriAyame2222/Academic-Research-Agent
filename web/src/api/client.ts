@@ -51,10 +51,25 @@ export interface SelectedFile {
 }
 
 export interface PaperInfo {
+  document_id?: string;
   file_name: string;
   file_path: string;
   size_bytes: number;
   suffix: string;
+  file_url?: string | null;
+  vector_status?: string;
+}
+
+export interface HealthInfo {
+  chroma_ready: boolean;
+  outbox_pending: number;
+  outbox_processing: number;
+  outbox_retry: number;
+  outbox_dead_letter: number;
+}
+
+export function getHealth(): Promise<HealthInfo> {
+  return getJson("/api/health");
 }
 
 export function listPapers(): Promise<PaperInfo[]> {
